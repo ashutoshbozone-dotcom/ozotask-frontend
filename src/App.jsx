@@ -1100,8 +1100,18 @@ export default function App() {
   const unreadCount = notifications.filter(n=>!n.read).length;
   const viewTitles = { dashboard:"Dashboard", tasks:"Tasks", projects:"Projects", team:"Team", notifications:"Notifications", settings:"Settings" };
 
-  // Fetch tasks assigned to current user from backend and merge into local state
-  const syncTasksFromBackend = async (user) => {
+  const sendEmailNotify = async (type, payload) => {
+    try {
+      await fetch(`${API_URL}/api/notify/${type}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch (e) { console.warn("[Notify] email send failed:", e.message); }
+  };
+
+  // Fetch tasks from backend and merge — no duplicates, maps assignees by email
+  const syncTasksFromBackend = async (user, currentAllUsers) => {
     if (!user?.email || !user.email.includes("@")) return;
     try {
       const isAdmin = user.role === "owner";
@@ -1113,66 +1123,100 @@ export default function App() {
       if (!res.ok) return;
       const backendTasks = await res.json();
       if (!backendTasks.length) return;
+
+      const usersRef = currentAllUsers || allUsers;
+
       setTasks(prev => {
-        const existingIds = new Set(prev.map(t => String(t.backendId || t.id)));
-        const newTasks = backendTasks
-          .filter(bt => !existingIds.has(String(bt._id)))
-          .map(bt => ({
-            id: bt.localId || Date.now() + Math.random(),
-            backendId: bt._id,
-            title: bt.title, description: bt.description,
-            projectId: bt.projectId, assignees: bt.assigneeIds || [],
-            status: bt.status, priority: bt.priority,
-            dueDate: bt.dueDate, createdBy: bt.createdBy,
-            type: bt.type, autoFollowUp: bt.autoFollowUp,
-            comments: bt.comments || [],
-            createdAt: bt.createdAt, updatedAt: bt.updatedAt,
-          }));
-        return [...prev, ...newTasks];
+        // Deduplicate by backendId and localId
+        const knownBackendIds = new Set(prev.map(t => t.backendId).filter(Boolean));
+        const knownLocalIds   = new Set(prev.map(t => String(t.id)));
+
+        // Update status/comments on tasks we already have
+        const updated = prev.map(t => {
+          const match = backendTasks.find(bt =>
+            bt._id === t.backendId || String(bt.localId) === String(t.id)
+          );
+          if (!match) return t;
+          // Stamp backendId if missing
+          return { ...t, backendId: match._id, status: match.status, comments: match.comments || t.comments };
+        });
+
+        // Add tasks we don't have yet
+        const toAdd = backendTasks.filter(bt =>
+          !knownBackendIds.has(bt._id) && !knownLocalIds.has(String(bt.localId))
+        );
+
+        const newTasks = toAdd.map(bt => ({
+          id: bt.localId ? Number(bt.localId) : Date.now() + Math.random(),
+          backendId: bt._id,
+          title: bt.title,
+          description: bt.description || "",
+          projectId: bt.projectId,
+          // Map assignee emails → local user IDs so UI renders them correctly
+          assignees: (bt.assigneeEmails || []).map(email => {
+            const u = usersRef.find(u => u.email?.toLowerCase() === email.toLowerCase());
+            return u ? u.id : null;
+          }).filter(id => id !== null),
+          assigneeEmails: bt.assigneeEmails || [],
+          status: bt.status || "todo",
+          priority: bt.priority || "medium",
+          dueDate: bt.dueDate,
+          createdBy: bt.createdBy,
+          createdByName: bt.createdByName,
+          type: bt.type || "individual",
+          autoFollowUp: bt.autoFollowUp,
+          comments: bt.comments || [],
+          createdAt: bt.createdAt,
+          updatedAt: bt.updatedAt,
+        }));
+
+        return [...updated, ...newTasks];
       });
     } catch {}
   };
 
-  // Run sync whenever user logs in
+  // Sync on login
   useEffect(() => {
     if (currentUser) syncTasksFromBackend(currentUser);
   }, [currentUser?.id]);
 
-  const sendEmailNotify = async (type, payload) => {
-    try {
-      await fetch(`${API_URL}/api/notify/${type}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-    } catch (e) { console.warn("[Notify] email send failed:", e.message); }
-  };
-
   const handleCreateTask = async (form) => {
     const localId = Date.now();
-    const newTask = { id:localId, ...form, createdBy:currentUser.id, createdAt:new Date().toISOString().split("T")[0], updatedAt:new Date().toISOString().split("T")[0], status:"todo", comments:[] };
-    setTasks(prev=>[...prev,newTask]);
+    const assigneeUsers = form.assignees.map(id => getUserById(id, allUsers)).filter(Boolean);
+    const assigneeEmails = assigneeUsers.map(u => u.email?.toLowerCase()).filter(e => e?.includes("@"));
 
-    // Push to backend so assignees see it on any device
+    const newTask = {
+      id: localId, ...form,
+      createdBy: currentUser.id,
+      createdAt: new Date().toISOString().split("T")[0],
+      updatedAt: new Date().toISOString().split("T")[0],
+      status: "todo", comments: [],
+    };
+    setTasks(prev => [...prev, newTask]);
+
+    // Push to backend — get backendId back and stamp it to avoid future duplicates
     try {
-      const assigneeUsers = form.assignees.map(id => getUserById(id, allUsers)).filter(Boolean);
-      await fetch(`${API_URL}/api/shared/tasks`, {
+      const res = await fetch(`${API_URL}/api/shared/tasks`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-admin-key": ADMIN_KEY },
         body: JSON.stringify({
           localId, title: form.title, description: form.description,
           projectId: form.projectId, assigneeIds: form.assignees,
-          assigneeEmails: assigneeUsers.map(u => u.email?.toLowerCase()).filter(e => e?.includes("@")),
+          assigneeEmails,
           status: "todo", priority: form.priority, type: form.type,
           dueDate: form.dueDate, autoFollowUp: form.autoFollowUp,
           createdBy: currentUser.id, createdByName: currentUser.name,
         }),
       });
+      if (res.ok) {
+        const saved = await res.json();
+        // Stamp backendId on local task so sync won't duplicate it
+        setTasks(prev => prev.map(t => t.id === localId ? { ...t, backendId: saved._id } : t));
+      }
     } catch {}
 
     const ts = new Date().toISOString();
     const proj = projects.find(p=>p.id===form.projectId);
-    const assigneeUsers = form.assignees.map(id=>getUserById(id, allUsers)).filter(Boolean);
 
     // Send real emails
     sendEmailNotify("task-assigned", {
@@ -1192,9 +1236,19 @@ export default function App() {
   const handleUpdateTask = (taskId, updates) => {
     setTasks(prev=>prev.map(t=>t.id===taskId?{...t,...updates,updatedAt:new Date().toISOString().split("T")[0]}:t));
     if (detailTask?.id===taskId) setDetailTask(prev=>({...prev,...updates}));
+
+    // Push update to backend so all devices see the new status/comments
+    const task = tasks.find(t=>t.id===taskId);
+    if (task?.backendId) {
+      fetch(`${API_URL}/api/shared/tasks/${task.backendId}?email=${encodeURIComponent(currentUser.email)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updates),
+      }).catch(()=>{});
+    }
+
     // Send "task completed" email to the creator when status → done
     if (updates.status === "done") {
-      const task = tasks.find(t=>t.id===taskId);
       if (task) {
         const creator = getUserById(task.createdBy, allUsers);
         if (creator && creator.email && creator.email.includes("@")) {
