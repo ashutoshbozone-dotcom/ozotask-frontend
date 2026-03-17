@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 
-const API_URL = "https://taskflow-backend-production-7392.up.railway.app";
+const API_URL   = "https://taskflow-backend-production-7392.up.railway.app";
+const ADMIN_KEY = "OzoAdmin@2026";
 import {
   LayoutDashboard, CheckSquare, FolderOpen, Users, Bell,
   LogOut, Plus, Search, Calendar, Clock, MessageCircle,
@@ -851,50 +852,49 @@ const TeamView = ({ users, setUsers, tasks, currentUser, teams, designations, ro
   const visible = isAdmin ? allMembers : allMembers.filter(u => u.team === currentUser.team);
   const filtered = visible.filter(u => u.name.toLowerCase().includes(search.toLowerCase()) || u.email.toLowerCase().includes(search.toLowerCase()) || (u.designation||"").toLowerCase().includes(search.toLowerCase()));
 
-  const syncToBackend = async (method, path, body) => {
-    try {
-      const token = localStorage.getItem("ozotoken");
-      await fetch(`${API_URL}${path}`, {
-        method,
-        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: body ? JSON.stringify(body) : undefined,
-      });
-    } catch { /* backend sync optional */ }
+  const adminFetch = async (method, path, body) => {
+    const res = await fetch(`${API_URL}${path}`, {
+      method,
+      headers: { "Content-Type": "application/json", "x-admin-key": ADMIN_KEY },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return res;
   };
 
   const handleSubmit = async (form) => {
     if (editingUser) {
       const updated = { ...editingUser, ...form, password: form.password || editingUser.password };
       setUsers(prev => prev.map(u => u.id === editingUser.id ? updated : u));
-      syncToBackend("PUT", `/api/users/${editingUser.backendId || editingUser.id}`, { name: form.name, email: form.email, role: form.role, team: form.team, phone: form.phone, designation: form.designation, ...(form.password ? { password: form.password } : {}) });
+      try {
+        await adminFetch("PUT", `/api/admin/users/${encodeURIComponent(editingUser.email)}`, {
+          name: form.name, role: form.role, team: form.team,
+          phone: form.phone, designation: form.designation,
+          ...(form.password ? { password: form.password } : {}),
+        });
+        setSyncMsg("✓ User updated");
+      } catch { setSyncMsg("✓ Updated locally"); }
+      setTimeout(() => setSyncMsg(""), 2500);
     } else {
       const newUser = { ...form, id: Date.now() };
       setUsers(prev => [...prev, newUser]);
-      // Also create in backend so user can log in from any device
       try {
-        const token = localStorage.getItem("ozotoken");
-        const res = await fetch(`${API_URL}/api/users`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-          body: JSON.stringify({ name: form.name, email: form.email, password: form.password, role: form.role, team: form.team, phone: form.phone }),
+        const res = await adminFetch("POST", "/api/admin/users", {
+          name: form.name, email: form.email, password: form.password,
+          role: form.role, team: form.team, phone: form.phone, designation: form.designation,
         });
-        if (res.ok) {
-          setSyncMsg("✓ User created and synced to server");
-        } else {
-          setSyncMsg("✓ User created locally (backend sync failed)");
-        }
-        setTimeout(() => setSyncMsg(""), 3000);
-      } catch {
-        setSyncMsg("✓ User created locally");
-        setTimeout(() => setSyncMsg(""), 3000);
-      }
+        setSyncMsg(res.ok ? "✓ User created — can log in from any device" : "✓ Created locally only");
+      } catch { setSyncMsg("✓ Created locally only"); }
+      setTimeout(() => setSyncMsg(""), 3000);
     }
     setEditingUser(null);
   };
-  const handleDelete = (id) => {
-    setUsers(prev => prev.filter(u => u.id !== id));
+
+  const handleDelete = async (id) => {
     const u = users.find(x => x.id === id);
-    if (u) syncToBackend("DELETE", `/api/users/${u.backendId || u.id}`);
+    setUsers(prev => prev.filter(u => u.id !== id));
+    if (u) {
+      try { await adminFetch("DELETE", `/api/admin/users/${encodeURIComponent(u.email)}`); } catch {}
+    }
   };
 
   return (
