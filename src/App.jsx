@@ -309,13 +309,28 @@ const DashboardView = ({ currentUser, tasks, projects, notifications, setView, o
   );
 };
 
+const getAssignable = (currentUser, users) => {
+  if (currentUser.role === "owner") return users;
+  if (currentUser.role === "manager") {
+    return users.filter(u =>
+      u.id === currentUser.id ||
+      u.reportsTo === currentUser.id ||
+      u.id === currentUser.reportsTo
+    );
+  }
+  // employee: self + their direct manager
+  return users.filter(u =>
+    u.id === currentUser.id ||
+    u.id === currentUser.reportsTo
+  );
+};
+
 const CreateTaskModal = ({ open, onClose, currentUser, projects, users, onSubmit }) => {
   const empty = { title:"", description:"", projectId:"", assignees:[], priority:"medium", type:"individual", dueDate:"", autoFollowUp:true };
   const [form, setForm] = useState(empty);
   const [step, setStep] = useState(1);
   useEffect(() => { if (!open) { setForm(empty); setStep(1); } }, [open]);
-  const canAssignAll = currentUser.role === "owner";
-  const assignable = canAssignAll ? users.filter(u=>u.id!==currentUser.id) : users.filter(u=>u.team===currentUser.team&&u.id!==currentUser.id);
+  const assignable = getAssignable(currentUser, users);
   const toggleAssignee = (id) => setForm(f=>({...f,assignees:f.assignees.includes(id)?f.assignees.filter(x=>x!==id):[...f.assignees,id],type:[...f.assignees.filter(x=>x!==id),(f.assignees.includes(id)?[]:id)].length>1?"collaborative":"individual"}));
   const handleSubmit = () => { if (!form.title.trim()||!form.projectId||form.assignees.length===0||!form.dueDate) return; onSubmit({...form,projectId:parseInt(form.projectId)}); onClose(); };
   return (
@@ -333,7 +348,24 @@ const CreateTaskModal = ({ open, onClose, currentUser, projects, users, onSubmit
         </div>}
         {step===2&&<div className="space-y-4">
           <div><label className="text-xs font-semibold text-gray-600 block mb-2">Assign To * {form.assignees.length>0&&<span className="text-indigo-500">({form.assignees.length} selected)</span>}</label>
-          <div className="space-y-2 max-h-52 overflow-y-auto">{assignable.map(u=><button key={u.id} onClick={()=>toggleAssignee(u.id)} className={`w-full flex items-center gap-3 p-2.5 rounded-xl border transition-all text-left ${form.assignees.includes(u.id)?"border-indigo-400 bg-indigo-50":"border-gray-100 hover:border-gray-200"}`}><Avatar user={u} size="sm"/><div className="flex-1"><div className="text-sm font-medium text-gray-900">{u.name}</div><div className="text-xs text-gray-400 capitalize">{u.role} · {u.team}</div></div>{form.assignees.includes(u.id)&&<Check size={14} className="text-indigo-500"/>}</button>)}</div></div>
+          <div className="space-y-2 max-h-52 overflow-y-auto">{assignable.map(u=>{
+            const isSelf = u.id === currentUser.id;
+            const isManager = u.id === currentUser.reportsTo;
+            return (
+              <button key={u.id} onClick={()=>toggleAssignee(u.id)} className={`w-full flex items-center gap-3 p-2.5 rounded-xl border transition-all text-left ${form.assignees.includes(u.id)?"border-indigo-400 bg-indigo-50":"border-gray-100 hover:border-gray-200"}`}>
+                <Avatar user={u} size="sm"/>
+                <div className="flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-sm font-medium text-gray-900">{u.name}</span>
+                    {isSelf && <span className="text-xs bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full">You</span>}
+                    {isManager && <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">Your Manager</span>}
+                  </div>
+                  <div className="text-xs text-gray-400 capitalize">{u.designation || u.role} · {u.team}</div>
+                </div>
+                {form.assignees.includes(u.id)&&<Check size={14} className="text-indigo-500"/>}
+              </button>
+            );
+          })}</div></div>
           <div className="bg-gray-50 rounded-xl p-4 space-y-3">
             <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Notifications</p>
             <label className="flex items-center gap-3 cursor-pointer"><div onClick={()=>setForm(f=>({...f,autoFollowUp:!f.autoFollowUp}))} className={`w-10 h-5 rounded-full transition-colors relative flex-shrink-0 ${form.autoFollowUp?"bg-indigo-500":"bg-gray-200"}`}><div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${form.autoFollowUp?"translate-x-5":"translate-x-0.5"}`}></div></div><div><div className="text-sm font-medium text-gray-800">Auto follow-up reminders</div><div className="text-xs text-gray-500">Send email & WhatsApp reminders before due date</div></div></label>
@@ -591,8 +623,8 @@ const ProjectsView = ({ projects, tasks, users, currentUser, onCreateProject, on
   );
 };
 
-const UserModal = ({ open, onClose, user, onSubmit, onDelete }) => {
-  const empty = { name:"", email:"", password:"", role:"employee", designation:"", team:"Engineering", phone:"", color:"bg-blue-500" };
+const UserModal = ({ open, onClose, user, onSubmit, onDelete, allUsers }) => {
+  const empty = { name:"", email:"", password:"", role:"employee", designation:"", team:"Engineering", phone:"", color:"bg-blue-500", reportsTo:"" };
   const [form, setForm] = useState(empty);
   const [showPass, setShowPass] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -640,11 +672,20 @@ const UserModal = ({ open, onClose, user, onSubmit, onDelete }) => {
               {TEAMS.map(t=><option key={t} value={t}>{t}</option>)}
             </select>
           </div>
-          <div className="col-span-2">
+          <div>
             <label className="text-xs font-semibold text-gray-600 block mb-1.5">Designation</label>
             <select value={form.designation} onChange={e=>setForm(f=>({...f,designation:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400">
               <option value="">Select designation</option>
               {DESIGNATIONS.map(d=><option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-gray-600 block mb-1.5">Reports To</label>
+            <select value={form.reportsTo} onChange={e=>setForm(f=>({...f,reportsTo:e.target.value?parseInt(e.target.value):""}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400">
+              <option value="">— No reporting manager —</option>
+              {(allUsers||[]).filter(u=>u.id!==(user?.id) && (u.role==="owner"||u.role==="manager")).map(u=>(
+                <option key={u.id} value={u.id}>{u.name} ({u.designation||u.role})</option>
+              ))}
             </select>
           </div>
           <div>
@@ -736,7 +777,9 @@ const TeamView = ({ users, setUsers, tasks, currentUser }) => {
                 )}
                 {isOwner && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded-full font-medium">Admin</span>}
               </div>
-              {u.phone && <div className="text-xs text-gray-400 flex items-center gap-1 mb-3"><Phone size={10}/>{u.phone}</div>}
+              {u.phone && <div className="text-xs text-gray-400 flex items-center gap-1"><Phone size={10}/>{u.phone}</div>}
+              {u.reportsTo && (() => { const mgr = allMembers.find(m=>m.id===u.reportsTo); return mgr ? <div className="text-xs text-gray-400 flex items-center gap-1 mb-1"><ArrowUpRight size={10}/>Reports to <span className="font-medium text-gray-600">{mgr.name}</span></div> : null; })()}
+              {!u.reportsTo && !u.phone && <div className="mb-1"/>}
               <div className="grid grid-cols-3 gap-2 mb-3">
                 <div className="text-center bg-blue-50 rounded-xl py-2"><div className="text-lg font-bold text-blue-700">{activeCount}</div><div className="text-xs text-blue-500">Active</div></div>
                 <div className="text-center bg-green-50 rounded-xl py-2"><div className="text-lg font-bold text-green-700">{doneCount}</div><div className="text-xs text-green-500">Done</div></div>
@@ -756,7 +799,7 @@ const TeamView = ({ users, setUsers, tasks, currentUser }) => {
           </div>
         )}
       </div>
-      <UserModal open={modalOpen} onClose={()=>{ setModalOpen(false); setEditingUser(null); }} user={editingUser} onSubmit={handleSubmit} onDelete={handleDelete}/>
+      <UserModal open={modalOpen} onClose={()=>{ setModalOpen(false); setEditingUser(null); }} user={editingUser} onSubmit={handleSubmit} onDelete={handleDelete} allUsers={allMembers}/>
     </div>
   );
 };
