@@ -1037,21 +1037,69 @@ function usePersistedState(key, fallback) {
 }
 
 export default function App() {
+  // One-time migration: clear old demo data
+  useEffect(() => {
+    if (!localStorage.getItem("ozo_migrated_v2")) {
+      localStorage.removeItem("ozo_tasks");
+      localStorage.removeItem("ozo_projects");
+      localStorage.removeItem("ozo_notifs");
+      localStorage.setItem("ozo_migrated_v2", "1");
+    }
+  }, []);
+
   const [currentUser, setCurrentUser] = usePersistedState("ozo_user", null);
   const [view, setView] = useState("dashboard");
-  const [tasks, setTasks] = usePersistedState("ozo_tasks", TASKS_INIT);
-  const [projects, setProjects] = usePersistedState("ozo_projects", PROJECTS_INIT);
+  const [tasks, setTasks] = usePersistedState("ozo_tasks", []);
+  const [projects, setProjects] = usePersistedState("ozo_projects", []);
   const [users, setUsers] = usePersistedState("ozo_users", []);
   const [teams, setTeams] = usePersistedState("ozo_teams", DEFAULT_TEAMS);
   const [designations, setDesignations] = usePersistedState("ozo_designations", DEFAULT_DESIGNATIONS);
   const [roles, setRoles] = usePersistedState("ozo_roles", DEFAULT_ROLES);
-  const [notifications, setNotifications] = usePersistedState("ozo_notifs", NOTIFS_INIT);
+  const [notifications, setNotifications] = usePersistedState("ozo_notifs", []);
   const [collapsed, setCollapsed] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [detailTask, setDetailTask] = useState(null);
 
   const unreadCount = notifications.filter(n=>!n.read).length;
   const viewTitles = { dashboard:"Dashboard", tasks:"Tasks", projects:"Projects", team:"Team", notifications:"Notifications", settings:"Settings" };
+
+  // Fetch tasks assigned to current user from backend and merge into local state
+  const syncTasksFromBackend = async (user) => {
+    if (!user?.email || !user.email.includes("@")) return;
+    try {
+      const isAdmin = user.role === "owner";
+      const url = isAdmin
+        ? `${API_URL}/api/shared/tasks/all`
+        : `${API_URL}/api/shared/tasks?email=${encodeURIComponent(user.email)}`;
+      const headers = isAdmin ? { "x-admin-key": ADMIN_KEY } : {};
+      const res = await fetch(url, { headers });
+      if (!res.ok) return;
+      const backendTasks = await res.json();
+      if (!backendTasks.length) return;
+      setTasks(prev => {
+        const existingIds = new Set(prev.map(t => String(t.backendId || t.id)));
+        const newTasks = backendTasks
+          .filter(bt => !existingIds.has(String(bt._id)))
+          .map(bt => ({
+            id: bt.localId || Date.now() + Math.random(),
+            backendId: bt._id,
+            title: bt.title, description: bt.description,
+            projectId: bt.projectId, assignees: bt.assigneeIds || [],
+            status: bt.status, priority: bt.priority,
+            dueDate: bt.dueDate, createdBy: bt.createdBy,
+            type: bt.type, autoFollowUp: bt.autoFollowUp,
+            comments: bt.comments || [],
+            createdAt: bt.createdAt, updatedAt: bt.updatedAt,
+          }));
+        return [...prev, ...newTasks];
+      });
+    } catch {}
+  };
+
+  // Run sync whenever user logs in
+  useEffect(() => {
+    if (currentUser) syncTasksFromBackend(currentUser);
+  }, [currentUser?.id]);
 
   const sendEmailNotify = async (type, payload) => {
     try {
@@ -1063,9 +1111,28 @@ export default function App() {
     } catch (e) { console.warn("[Notify] email send failed:", e.message); }
   };
 
-  const handleCreateTask = (form) => {
-    const newTask = { id:Date.now(), ...form, createdBy:currentUser.id, createdAt:new Date().toISOString().split("T")[0], updatedAt:new Date().toISOString().split("T")[0], status:"todo", comments:[] };
+  const handleCreateTask = async (form) => {
+    const localId = Date.now();
+    const newTask = { id:localId, ...form, createdBy:currentUser.id, createdAt:new Date().toISOString().split("T")[0], updatedAt:new Date().toISOString().split("T")[0], status:"todo", comments:[] };
     setTasks(prev=>[...prev,newTask]);
+
+    // Push to backend so assignees see it on any device
+    try {
+      const assigneeUsers = form.assignees.map(id => getUserById(id, allUsers)).filter(Boolean);
+      await fetch(`${API_URL}/api/shared/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-key": ADMIN_KEY },
+        body: JSON.stringify({
+          localId, title: form.title, description: form.description,
+          projectId: form.projectId, assigneeIds: form.assignees,
+          assigneeEmails: assigneeUsers.map(u => u.email?.toLowerCase()).filter(e => e?.includes("@")),
+          status: "todo", priority: form.priority, type: form.type,
+          dueDate: form.dueDate, autoFollowUp: form.autoFollowUp,
+          createdBy: currentUser.id, createdByName: currentUser.name,
+        }),
+      });
+    } catch {}
+
     const ts = new Date().toISOString();
     const proj = projects.find(p=>p.id===form.projectId);
     const assigneeUsers = form.assignees.map(id=>getUserById(id, allUsers)).filter(Boolean);
