@@ -134,6 +134,7 @@ const LoginPage = ({ onLogin, users, onSyncUsers }) => {
         team: u.team || "General",
         phone: u.phone || "",
         designation: u.designation || "",
+        reportsTo: u.reportsTo || "",
         initials: u.initials || u.name.split(" ").map(n=>n[0]).join("").slice(0,2).toUpperCase(),
         color: ["bg-blue-500","bg-pink-500","bg-green-500","bg-orange-500","bg-teal-500","bg-indigo-500"][i % 6],
         password: null, // password not exposed from backend
@@ -906,6 +907,7 @@ const TeamView = ({ users, setUsers, tasks, currentUser, teams, designations, ro
         await adminFetch("PUT", `/api/admin/users/${encodeURIComponent(editingUser.email)}`, {
           name: form.name, role: form.role, team: form.team,
           phone: form.phone, designation: form.designation,
+          reportsTo: form.reportsTo || "",
           ...(form.password ? { password: form.password } : {}),
         });
         setSyncMsg("✓ User updated");
@@ -918,6 +920,7 @@ const TeamView = ({ users, setUsers, tasks, currentUser, teams, designations, ro
         const res = await adminFetch("POST", "/api/admin/users", {
           name: form.name, email: form.email, password: form.password,
           role: form.role, team: form.team, phone: form.phone, designation: form.designation,
+          reportsTo: form.reportsTo || "",
         });
         setSyncMsg(res.ok ? "✓ User created — can log in from any device" : "✓ Created locally only");
       } catch { setSyncMsg("✓ Created locally only"); }
@@ -1063,6 +1066,18 @@ function usePersistedState(key, fallback) {
       return stored ? JSON.parse(stored) : fallback;
     } catch { return fallback; }
   });
+
+  // Cross-tab sync: when another tab writes to localStorage, update this tab's state
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === key) {
+        try { setState(e.newValue ? JSON.parse(e.newValue) : fallback); } catch {}
+      }
+    };
+    window.addEventListener("storage", handler);
+    return () => window.removeEventListener("storage", handler);
+  }, [key]);
+
   const setPersisted = (value) => {
     setState(prev => {
       const next = typeof value === "function" ? value(prev) : value;
@@ -1175,9 +1190,85 @@ export default function App() {
     } catch {}
   };
 
-  // Sync on login
+  // Sync projects from backend and merge into local state
+  const syncProjectsFromBackend = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/shared/projects`);
+      if (!res.ok) return;
+      const backendProjects = await res.json();
+      if (!backendProjects.length) return;
+      setProjects(prev => {
+        const knownBackendIds = new Set(prev.map(p => p.backendId).filter(Boolean));
+        // Update existing projects
+        const updated = prev.map(p => {
+          const match = backendProjects.find(bp => bp._id === p.backendId || String(bp.localId) === String(p.id));
+          if (!match) return p;
+          return { ...p, backendId: match._id, name: match.name, description: match.description, emoji: match.emoji, color: match.color, deadline: match.deadline, members: match.members };
+        });
+        // Add new ones from backend
+        const toAdd = backendProjects.filter(bp => !knownBackendIds.has(bp._id) && !prev.find(p => String(p.id) === String(bp.localId)));
+        const newProjs = toAdd.map(bp => ({
+          id: bp.localId ? Number(bp.localId) : Date.now() + Math.random(),
+          backendId: bp._id,
+          name: bp.name, description: bp.description || "",
+          emoji: bp.emoji || "📁", color: bp.color || "bg-blue-500",
+          deadline: bp.deadline, owner: bp.owner, members: bp.members || [],
+          createdAt: bp.createdAt,
+        }));
+        return [...updated, ...newProjs];
+      });
+    } catch {}
+  };
+
+  // Sync users from backend into local list
+  const syncUsersFromBackend = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/admin/users`, { headers: { "x-admin-key": ADMIN_KEY } });
+      if (!res.ok) return;
+      const backendUsers = await res.json();
+      if (!backendUsers.length) return;
+      setUsers(prev => {
+        const existingEmails = new Set(prev.map(u => u.email.toLowerCase()));
+        const newOnes = backendUsers
+          .filter(u => !existingEmails.has(u.email.toLowerCase()))
+          .map((u, i) => ({
+            id: u._id, backendId: u._id,
+            name: u.name, email: u.email, role: u.role,
+            team: u.team || "General", phone: u.phone || "",
+            designation: u.designation || "", reportsTo: u.reportsTo || "",
+            initials: u.initials || u.name.split(" ").map(n=>n[0]).join("").slice(0,2).toUpperCase(),
+            color: ["bg-blue-500","bg-pink-500","bg-green-500","bg-orange-500","bg-teal-500","bg-indigo-500"][(prev.length + i) % 6],
+            password: null,
+          }));
+        // Also update existing users in case their role/designation changed
+        const updatedExisting = prev.map(p => {
+          const match = backendUsers.find(bu => bu.email.toLowerCase() === p.email.toLowerCase());
+          if (!match) return p;
+          return { ...p, name: match.name, role: match.role, team: match.team || p.team, phone: match.phone || p.phone, designation: match.designation || p.designation, reportsTo: match.reportsTo || p.reportsTo };
+        });
+        return newOnes.length ? [...updatedExisting, ...newOnes] : updatedExisting;
+      });
+    } catch {}
+  };
+
+  // On every login: clear stale browser cache, pull everything fresh from backend
+  // This ensures different browsers/devices always see the same data
   useEffect(() => {
-    if (currentUser) syncTasksFromBackend(currentUser);
+    if (!currentUser) return;
+    // Wipe local cache so we don't mix stale localStorage data with fresh backend data
+    setTasks([]);
+    setProjects([]);
+    // Fetch fresh from backend immediately after clearing
+    syncUsersFromBackend();
+    syncProjectsFromBackend();
+    syncTasksFromBackend(currentUser);
+    // Keep polling every 30s so changes from other devices show up without refresh
+    const interval = setInterval(() => {
+      syncTasksFromBackend(currentUser);
+      syncProjectsFromBackend();
+      syncUsersFromBackend();
+    }, 30000);
+    return () => clearInterval(interval);
   }, [currentUser?.id]);
 
   const handleCreateTask = async (form) => {
@@ -1262,16 +1353,47 @@ export default function App() {
     }
   };
 
-  const handleCreateProject = (form) => {
-    const newProj = { id: Date.now(), ...form };
-    setProjects(prev=>[...prev, newProj]);
+  const handleCreateProject = async (form) => {
+    const localId = Date.now();
+    const newProj = { id: localId, ...form };
+    setProjects(prev => [...prev, newProj]);
+    try {
+      const res = await fetch(`${API_URL}/api/shared/projects`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-key": ADMIN_KEY },
+        body: JSON.stringify({ localId, ...form, owner: currentUser.id }),
+      });
+      if (res.ok) {
+        const saved = await res.json();
+        setProjects(prev => prev.map(p => p.id === localId ? { ...p, backendId: saved._id } : p));
+      }
+    } catch {}
   };
-  const handleEditProject = (projectId, form) => {
-    setProjects(prev=>prev.map(p=>p.id===projectId ? { ...p, ...form } : p));
+  const handleEditProject = async (projectId, form) => {
+    setProjects(prev => prev.map(p => p.id === projectId ? { ...p, ...form } : p));
+    const proj = projects.find(p => p.id === projectId);
+    if (proj?.backendId) {
+      try {
+        await fetch(`${API_URL}/api/shared/projects/${proj.backendId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", "x-admin-key": ADMIN_KEY },
+          body: JSON.stringify(form),
+        });
+      } catch {}
+    }
   };
-  const handleDeleteProject = (projectId) => {
-    setProjects(prev=>prev.filter(p=>p.id!==projectId));
-    setTasks(prev=>prev.filter(t=>t.projectId!==projectId));
+  const handleDeleteProject = async (projectId) => {
+    setProjects(prev => prev.filter(p => p.id !== projectId));
+    setTasks(prev => prev.filter(t => t.projectId !== projectId));
+    const proj = projects.find(p => p.id === projectId);
+    if (proj?.backendId) {
+      try {
+        await fetch(`${API_URL}/api/shared/projects/${proj.backendId}`, {
+          method: "DELETE",
+          headers: { "x-admin-key": ADMIN_KEY },
+        });
+      } catch {}
+    }
   };
 
   const allUsers = [ADMIN_USER, ...users];
@@ -1290,7 +1412,11 @@ export default function App() {
     <div className="flex h-screen bg-gray-50 overflow-hidden font-sans">
       <Sidebar currentUser={currentUser} view={view} setView={setView} unreadCount={unreadCount} collapsed={collapsed} setCollapsed={setCollapsed}/>
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-        <Header title={viewTitles[view]} currentUser={currentUser} onLogout={()=>{ localStorage.removeItem("ozo_user"); setCurrentUser(null); }} onCollapse={()=>setCollapsed(c=>!c)}/>
+        <Header title={viewTitles[view]} currentUser={currentUser} onLogout={()=>{
+          // Clear all cached data so the next browser session fetches fresh from backend
+          ["ozo_user","ozo_tasks","ozo_projects","ozo_users","ozo_notifs"].forEach(k => localStorage.removeItem(k));
+          setTasks([]); setProjects([]); setUsers([]); setCurrentUser(null);
+        }} onCollapse={()=>setCollapsed(c=>!c)}/>
         {view==="dashboard"&&<DashboardView currentUser={currentUser} tasks={tasks} projects={projects} notifications={notifications} setView={setView} openCreateTask={()=>setCreateOpen(true)}/>}
         {view==="tasks"&&<TasksView currentUser={currentUser} tasks={tasks} projects={projects} users={allUsers} openCreateTask={()=>setCreateOpen(true)} openTaskDetail={setDetailTask}/>}
         {view==="projects"&&<ProjectsView projects={projects} tasks={tasks} users={allUsers} currentUser={currentUser} onCreateProject={handleCreateProject} onEditProject={handleEditProject} onDeleteProject={handleDeleteProject}/>}
