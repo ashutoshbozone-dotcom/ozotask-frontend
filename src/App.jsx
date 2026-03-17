@@ -8,7 +8,7 @@ import {
   TrendingUp, Filter, Send, AlertTriangle, ChevronRight,
   Menu, Zap, User, Hash, ArrowUpRight, RefreshCw, Eye,
   Phone, ChevronDown, Trash2, Edit3, Circle, Star,
-  AlertCircle, Check
+  AlertCircle, Check, Settings, Tag, Briefcase, Shield
 } from "lucide-react";
 
 const ADMIN_USER = {
@@ -19,9 +19,9 @@ const ADMIN_USER = {
 };
 
 const USER_COLORS = ["bg-purple-500","bg-blue-500","bg-pink-500","bg-green-500","bg-orange-500","bg-teal-500","bg-red-500","bg-indigo-500","bg-cyan-500","bg-amber-500"];
-const TEAMS = ["Leadership","Engineering","Marketing","Design","Sales","Operations","HR","Finance"];
-const ROLES = ["owner","manager","employee"];
-const DESIGNATIONS = ["Owner & Admin","General Manager","Project Manager","Team Lead","Senior Engineer","Engineer","Designer","Marketing Manager","Marketing Executive","HR Manager","HR Executive","Sales Manager","Sales Executive","Operations Manager","Operations Executive","Analyst","Intern","Other"];
+const DEFAULT_TEAMS = ["Leadership","Engineering","Marketing","Design","Sales","Operations","HR","Finance"];
+const DEFAULT_ROLES = ["manager","employee"];
+const DEFAULT_DESIGNATIONS = ["Owner & Admin","General Manager","Project Manager","Team Lead","Senior Engineer","Engineer","Designer","Marketing Manager","Marketing Executive","HR Manager","HR Executive","Sales Manager","Sales Executive","Operations Manager","Operations Executive","Analyst","Intern","Other"];
 
 const PROJECTS_INIT = [
   { id: 1, name: "Website Redesign",       color: "bg-blue-500",   emoji: "🌐", description: "Complete overhaul of company website",           deadline: "2026-04-15", owner: 1, members: [1,2,3,5] },
@@ -125,8 +125,8 @@ const LoginPage = ({ onLogin, users }) => {
     const allUsers = [ADMIN_USER, ...users];
     const input = email.trim().toLowerCase();
     const user = allUsers.find(u => (u.email.toLowerCase() === input || u.name.toLowerCase() === input) && u.password === password);
-    if (user) { setTimeout(() => onLogin(user), 300); return; }
-    // Try backend
+    if (user) { localStorage.setItem("ozotoken", "local"); setTimeout(() => onLogin(user), 300); return; }
+    // Try backend (for users created on other devices or via backend)
     try {
       const res = await fetch(`${API_URL}/api/auth/login`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -135,8 +135,23 @@ const LoginPage = ({ onLogin, users }) => {
       const data = await res.json();
       if (!res.ok) { setError("Invalid email or password."); setLoading(false); return; }
       localStorage.setItem("ozotoken", data.token);
+      // Build a user object compatible with the app
+      const backendUser = {
+        id: data.user._id,
+        backendId: data.user._id,
+        name: data.user.name,
+        email: data.user.email,
+        role: data.user.role,
+        team: data.user.team || "General",
+        phone: data.user.phone || "",
+        initials: data.user.name.split(" ").map(n=>n[0]).join("").slice(0,2).toUpperCase(),
+        color: "bg-indigo-500",
+        designation: data.user.designation || data.user.role,
+        password,
+      };
+      // Merge with local users list if present
       const matched = allUsers.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
-      onLogin(matched || { ...data.user, id: data.user._id, initials: data.user.name.split(" ").map(n=>n[0]).join("").slice(0,2).toUpperCase(), color:"bg-indigo-500" });
+      onLogin(matched || backendUser);
     } catch {
       setError("Invalid email or password.");
       setLoading(false);
@@ -190,16 +205,22 @@ const LoginPage = ({ onLogin, users }) => {
 };
 
 const NAV = [
-  { id:"dashboard", icon:LayoutDashboard, label:"Dashboard" },
-  { id:"tasks",     icon:CheckSquare,     label:"Tasks" },
-  { id:"projects",  icon:FolderOpen,      label:"Projects" },
-  { id:"team",      icon:Users,           label:"Team" },
-  { id:"notifications", icon:Bell,        label:"Notifications" },
+  { id:"dashboard",     icon:LayoutDashboard, label:"Dashboard" },
+  { id:"tasks",         icon:CheckSquare,     label:"Tasks" },
+  { id:"projects",      icon:FolderOpen,      label:"Projects" },
+  { id:"team",          icon:Users,           label:"Team",          adminOnly:false, managerOnly:true },
+  { id:"notifications", icon:Bell,            label:"Notifications" },
+  { id:"settings",      icon:Settings,        label:"Settings",      adminOnly:true },
 ];
 
 const Sidebar = ({ currentUser, view, setView, unreadCount, collapsed, setCollapsed }) => {
-  const canSeeTeam = currentUser.role === "owner" || currentUser.role === "manager";
-  const navItems = NAV.filter(n => n.id !== "team" || canSeeTeam);
+  const isOwner = currentUser.role === "owner";
+  const isManager = currentUser.role === "manager";
+  const navItems = NAV.filter(n => {
+    if (n.adminOnly) return isOwner;
+    if (n.managerOnly) return isOwner || isManager;
+    return true;
+  });
   return (
     <aside className={`flex flex-col bg-gray-900 text-white transition-all duration-200 flex-shrink-0 ${collapsed ? "w-16" : "w-56"}`}>
       <div className={`flex items-center gap-2.5 p-3 border-b border-gray-800 ${collapsed ? "justify-center" : ""}`}>
@@ -623,7 +644,112 @@ const ProjectsView = ({ projects, tasks, users, currentUser, onCreateProject, on
   );
 };
 
-const UserModal = ({ open, onClose, user, onSubmit, onDelete, allUsers }) => {
+// ─── Settings View ────────────────────────────────────────────────────────────
+const SettingsView = ({ teams, setTeams, designations, setDesignations, roles, setRoles }) => {
+  const [activeTab, setActiveTab] = useState("teams");
+  const [newItem, setNewItem] = useState("");
+  const [editingIdx, setEditingIdx] = useState(null);
+  const [editVal, setEditVal] = useState("");
+
+  const configs = {
+    teams:        { label:"Teams",        icon:Briefcase, list:teams,        setList:setTeams,        placeholder:"e.g. Engineering" },
+    designations: { label:"Designations", icon:Tag,       list:designations, setList:setDesignations, placeholder:"e.g. Senior Engineer" },
+    roles:        { label:"Roles",        icon:Shield,    list:roles,        setList:setRoles,        placeholder:"e.g. manager" },
+  };
+  const cfg = configs[activeTab];
+
+  const handleAdd = () => {
+    const val = newItem.trim();
+    if (!val || cfg.list.includes(val)) return;
+    cfg.setList(prev => [...prev, val]);
+    setNewItem("");
+  };
+
+  const handleDelete = (idx) => {
+    cfg.setList(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleEdit = (idx) => {
+    setEditingIdx(idx);
+    setEditVal(cfg.list[idx]);
+  };
+
+  const handleEditSave = (idx) => {
+    const val = editVal.trim();
+    if (!val) return;
+    cfg.setList(prev => prev.map((item, i) => i === idx ? val : item));
+    setEditingIdx(null);
+    setEditVal("");
+  };
+
+  return (
+    <div className="flex-1 overflow-y-auto p-6">
+      <div className="max-w-2xl mx-auto">
+        <div className="mb-6">
+          <h2 className="text-lg font-semibold text-gray-900">Admin Settings</h2>
+          <p className="text-sm text-gray-400 mt-0.5">Manage dropdown options used across the platform</p>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-2 mb-5 bg-gray-100 p-1 rounded-xl w-fit">
+          {Object.entries(configs).map(([key, c]) => (
+            <button key={key} onClick={() => { setActiveTab(key); setNewItem(""); setEditingIdx(null); }}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === key ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+              <c.icon size={14}/>{c.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+          {/* Add new */}
+          <div className="p-4 border-b border-gray-100 flex gap-2">
+            <input value={newItem} onChange={e=>setNewItem(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&handleAdd()}
+              className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400"
+              placeholder={cfg.placeholder}/>
+            <Btn onClick={handleAdd} disabled={!newItem.trim()}><Plus size={14}/>Add</Btn>
+          </div>
+
+          {/* List */}
+          <div className="divide-y divide-gray-50">
+            {cfg.list.length === 0 && (
+              <div className="text-center py-10 text-gray-300 text-sm">No items yet</div>
+            )}
+            {cfg.list.map((item, idx) => (
+              <div key={idx} className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 group transition-colors">
+                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${USER_COLORS[idx % USER_COLORS.length]}`}/>
+                {editingIdx === idx ? (
+                  <div className="flex-1 flex gap-2">
+                    <input value={editVal} onChange={e=>setEditVal(e.target.value)}
+                      onKeyDown={e=>{ if(e.key==="Enter") handleEditSave(idx); if(e.key==="Escape") setEditingIdx(null); }}
+                      autoFocus
+                      className="flex-1 border border-indigo-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-indigo-400"/>
+                    <Btn size="sm" onClick={()=>handleEditSave(idx)}>Save</Btn>
+                    <Btn size="sm" variant="secondary" onClick={()=>setEditingIdx(null)}>Cancel</Btn>
+                  </div>
+                ) : (
+                  <>
+                    <span className="flex-1 text-sm text-gray-800 capitalize">{item}</span>
+                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button onClick={()=>handleEdit(idx)} className="p-1.5 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-gray-700 transition-colors"><Edit3 size={13}/></button>
+                      <button onClick={()=>handleDelete(idx)} className="p-1.5 hover:bg-red-100 rounded-lg text-gray-400 hover:text-red-600 transition-colors"><Trash2 size={13}/></button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="px-4 py-2.5 bg-gray-50 border-t border-gray-100">
+            <p className="text-xs text-gray-400">{cfg.list.length} {cfg.label.toLowerCase()} configured · Changes apply immediately to all dropdowns</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const UserModal = ({ open, onClose, user, onSubmit, onDelete, allUsers, teams=DEFAULT_TEAMS, designations=DEFAULT_DESIGNATIONS, roles=DEFAULT_ROLES }) => {
   const empty = { name:"", email:"", password:"", role:"employee", designation:"", team:"Engineering", phone:"", color:"bg-blue-500", reportsTo:"" };
   const [form, setForm] = useState(empty);
   const [showPass, setShowPass] = useState(false);
@@ -663,20 +789,20 @@ const UserModal = ({ open, onClose, user, onSubmit, onDelete, allUsers }) => {
           <div>
             <label className="text-xs font-semibold text-gray-600 block mb-1.5">Role *</label>
             <select value={form.role} onChange={e=>setForm(f=>({...f,role:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400">
-              {ROLES.filter(r=>r!=="owner").map(r=><option key={r} value={r} className="capitalize">{r.charAt(0).toUpperCase()+r.slice(1)}</option>)}
+              {roles.map(r=><option key={r} value={r} className="capitalize">{r.charAt(0).toUpperCase()+r.slice(1)}</option>)}
             </select>
           </div>
           <div>
             <label className="text-xs font-semibold text-gray-600 block mb-1.5">Team</label>
             <select value={form.team} onChange={e=>setForm(f=>({...f,team:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400">
-              {TEAMS.map(t=><option key={t} value={t}>{t}</option>)}
+              {teams.map(t=><option key={t} value={t}>{t}</option>)}
             </select>
           </div>
           <div>
             <label className="text-xs font-semibold text-gray-600 block mb-1.5">Designation</label>
             <select value={form.designation} onChange={e=>setForm(f=>({...f,designation:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400">
               <option value="">Select designation</option>
-              {DESIGNATIONS.map(d=><option key={d} value={d}>{d}</option>)}
+              {designations.map(d=><option key={d} value={d}>{d}</option>)}
             </select>
           </div>
           <div>
@@ -715,25 +841,61 @@ const UserModal = ({ open, onClose, user, onSubmit, onDelete, allUsers }) => {
   );
 };
 
-const TeamView = ({ users, setUsers, tasks, currentUser }) => {
+const TeamView = ({ users, setUsers, tasks, currentUser, teams, designations, roles }) => {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [search, setSearch] = useState("");
+  const [syncMsg, setSyncMsg] = useState("");
   const isAdmin = currentUser.role === "owner";
   const allMembers = [ADMIN_USER, ...users];
   const visible = isAdmin ? allMembers : allMembers.filter(u => u.team === currentUser.team);
   const filtered = visible.filter(u => u.name.toLowerCase().includes(search.toLowerCase()) || u.email.toLowerCase().includes(search.toLowerCase()) || (u.designation||"").toLowerCase().includes(search.toLowerCase()));
 
-  const handleSubmit = (form) => {
+  const syncToBackend = async (method, path, body) => {
+    try {
+      const token = localStorage.getItem("ozotoken");
+      await fetch(`${API_URL}${path}`, {
+        method,
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch { /* backend sync optional */ }
+  };
+
+  const handleSubmit = async (form) => {
     if (editingUser) {
-      setUsers(prev => prev.map(u => u.id === editingUser.id ? { ...u, ...form, password: form.password || u.password } : u));
+      const updated = { ...editingUser, ...form, password: form.password || editingUser.password };
+      setUsers(prev => prev.map(u => u.id === editingUser.id ? updated : u));
+      syncToBackend("PUT", `/api/users/${editingUser.backendId || editingUser.id}`, { name: form.name, email: form.email, role: form.role, team: form.team, phone: form.phone, designation: form.designation, ...(form.password ? { password: form.password } : {}) });
     } else {
       const newUser = { ...form, id: Date.now() };
       setUsers(prev => [...prev, newUser]);
+      // Also create in backend so user can log in from any device
+      try {
+        const token = localStorage.getItem("ozotoken");
+        const res = await fetch(`${API_URL}/api/users`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({ name: form.name, email: form.email, password: form.password, role: form.role, team: form.team, phone: form.phone }),
+        });
+        if (res.ok) {
+          setSyncMsg("✓ User created and synced to server");
+        } else {
+          setSyncMsg("✓ User created locally (backend sync failed)");
+        }
+        setTimeout(() => setSyncMsg(""), 3000);
+      } catch {
+        setSyncMsg("✓ User created locally");
+        setTimeout(() => setSyncMsg(""), 3000);
+      }
     }
     setEditingUser(null);
   };
-  const handleDelete = (id) => setUsers(prev => prev.filter(u => u.id !== id));
+  const handleDelete = (id) => {
+    setUsers(prev => prev.filter(u => u.id !== id));
+    const u = users.find(x => x.id === id);
+    if (u) syncToBackend("DELETE", `/api/users/${u.backendId || u.id}`);
+  };
 
   return (
     <div className="flex-1 overflow-y-auto p-6">
@@ -742,7 +904,10 @@ const TeamView = ({ users, setUsers, tasks, currentUser }) => {
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
           <input value={search} onChange={e=>setSearch(e.target.value)} className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400" placeholder="Search members..."/>
         </div>
-        {isAdmin && <Btn onClick={()=>{ setEditingUser(null); setModalOpen(true); }}><Plus size={15}/>Add Member</Btn>}
+        <div className="flex items-center gap-3">
+          {syncMsg && <span className="text-xs text-green-600 bg-green-50 px-3 py-1.5 rounded-full">{syncMsg}</span>}
+          {isAdmin && <Btn onClick={()=>{ setEditingUser(null); setModalOpen(true); }}><Plus size={15}/>Add Member</Btn>}
+        </div>
       </div>
 
       {/* Summary bar for admin */}
@@ -799,7 +964,7 @@ const TeamView = ({ users, setUsers, tasks, currentUser }) => {
           </div>
         )}
       </div>
-      <UserModal open={modalOpen} onClose={()=>{ setModalOpen(false); setEditingUser(null); }} user={editingUser} onSubmit={handleSubmit} onDelete={handleDelete} allUsers={allMembers}/>
+      <UserModal open={modalOpen} onClose={()=>{ setModalOpen(false); setEditingUser(null); }} user={editingUser} onSubmit={handleSubmit} onDelete={handleDelete} allUsers={allMembers} teams={teams} designations={designations} roles={roles}/>
     </div>
   );
 };
@@ -877,13 +1042,16 @@ export default function App() {
   const [tasks, setTasks] = usePersistedState("ozo_tasks", TASKS_INIT);
   const [projects, setProjects] = usePersistedState("ozo_projects", PROJECTS_INIT);
   const [users, setUsers] = usePersistedState("ozo_users", []);
+  const [teams, setTeams] = usePersistedState("ozo_teams", DEFAULT_TEAMS);
+  const [designations, setDesignations] = usePersistedState("ozo_designations", DEFAULT_DESIGNATIONS);
+  const [roles, setRoles] = usePersistedState("ozo_roles", DEFAULT_ROLES);
   const [notifications, setNotifications] = usePersistedState("ozo_notifs", NOTIFS_INIT);
   const [collapsed, setCollapsed] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [detailTask, setDetailTask] = useState(null);
 
   const unreadCount = notifications.filter(n=>!n.read).length;
-  const viewTitles = { dashboard:"Dashboard", tasks:"Tasks", projects:"Projects", team:"Team", notifications:"Notifications" };
+  const viewTitles = { dashboard:"Dashboard", tasks:"Tasks", projects:"Projects", team:"Team", notifications:"Notifications", settings:"Settings" };
 
   const sendEmailNotify = async (type, payload) => {
     try {
@@ -960,8 +1128,9 @@ export default function App() {
         {view==="dashboard"&&<DashboardView currentUser={currentUser} tasks={tasks} projects={projects} notifications={notifications} setView={setView} openCreateTask={()=>setCreateOpen(true)}/>}
         {view==="tasks"&&<TasksView currentUser={currentUser} tasks={tasks} projects={projects} users={allUsers} openCreateTask={()=>setCreateOpen(true)} openTaskDetail={setDetailTask}/>}
         {view==="projects"&&<ProjectsView projects={projects} tasks={tasks} users={allUsers} currentUser={currentUser} onCreateProject={handleCreateProject} onEditProject={handleEditProject} onDeleteProject={handleDeleteProject}/>}
-        {view==="team"&&<TeamView users={users} setUsers={setUsers} tasks={tasks} currentUser={currentUser}/>}
+        {view==="team"&&<TeamView users={users} setUsers={setUsers} tasks={tasks} currentUser={currentUser} teams={teams} designations={designations} roles={roles}/>}
         {view==="notifications"&&<NotificationsView notifications={notifications} setNotifications={setNotifications} tasks={tasks} users={allUsers} currentUser={currentUser}/>}
+        {view==="settings"&&<SettingsView teams={teams} setTeams={setTeams} designations={designations} setDesignations={setDesignations} roles={roles} setRoles={setRoles}/>}
       </div>
       <CreateTaskModal open={createOpen} onClose={()=>setCreateOpen(false)} currentUser={currentUser} projects={projects} users={allUsers} onSubmit={handleCreateTask}/>
       <TaskDetailModal open={!!detailTask} onClose={()=>setDetailTask(null)} task={detailTask} projects={projects} users={allUsers} currentUser={currentUser} onUpdate={handleUpdateTask} onDelete={(id)=>setTasks(prev=>prev.filter(t=>t.id!==id))}/>
