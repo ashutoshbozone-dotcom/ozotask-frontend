@@ -11,14 +11,17 @@ import {
   AlertCircle, Check
 } from "lucide-react";
 
-const ALL_USERS = [
-  { id: 1, name: "Ashutosh",      initials: "AS", role: "owner",    email: "ashutosh.b.ozone@gmail.com",  password: "12345678",   phone: "+91 98765 43210", color: "bg-purple-500", team: "Leadership" },
-  { id: 2, name: "Rahul Sharma",  initials: "RS", role: "manager",  email: "rahul@ozotask.com",   password: "Rahul@123",   phone: "+91 87654 32109", color: "bg-blue-500",   team: "Engineering" },
-  { id: 3, name: "Priya Patel",   initials: "PP", role: "employee", email: "priya@ozotask.com",   password: "Priya@123",   phone: "+91 76543 21098", color: "bg-pink-500",   team: "Engineering" },
-  { id: 4, name: "Amit Kumar",    initials: "AK", role: "employee", email: "amit@ozotask.com",    password: "Amit@123",    phone: "+91 65432 10987", color: "bg-green-500",  team: "Marketing" },
-  { id: 5, name: "Neha Singh",    initials: "NS", role: "employee", email: "neha@ozotask.com",    password: "Neha@123",    phone: "+91 54321 09876", color: "bg-orange-500", team: "Design" },
-  { id: 6, name: "Vikram Joshi",  initials: "VJ", role: "manager",  email: "vikram@ozotask.com",  password: "Vikram@123",  phone: "+91 43210 98765", color: "bg-teal-500",   team: "Marketing" },
-];
+const ADMIN_USER = {
+  id: 1, name: "Admin", initials: "AD", role: "owner",
+  email: "@admin", password: "Admin@task",
+  phone: "", color: "bg-purple-500",
+  team: "Leadership", designation: "Owner & Admin",
+};
+
+const USER_COLORS = ["bg-purple-500","bg-blue-500","bg-pink-500","bg-green-500","bg-orange-500","bg-teal-500","bg-red-500","bg-indigo-500","bg-cyan-500","bg-amber-500"];
+const TEAMS = ["Leadership","Engineering","Marketing","Design","Sales","Operations","HR","Finance"];
+const ROLES = ["owner","manager","employee"];
+const DESIGNATIONS = ["Owner & Admin","General Manager","Project Manager","Team Lead","Senior Engineer","Engineer","Designer","Marketing Manager","Marketing Executive","HR Manager","HR Executive","Sales Manager","Sales Executive","Operations Manager","Operations Executive","Analyst","Intern","Other"];
 
 const PROJECTS_INIT = [
   { id: 1, name: "Website Redesign",       color: "bg-blue-500",   emoji: "🌐", description: "Complete overhaul of company website",           deadline: "2026-04-15", owner: 1, members: [1,2,3,5] },
@@ -106,7 +109,7 @@ const Modal = ({ open, onClose, title, children, width="max-w-lg" }) => {
   );
 };
 
-const LoginPage = ({ onLogin }) => {
+const LoginPage = ({ onLogin, users }) => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPass, setShowPass] = useState(false);
@@ -118,99 +121,69 @@ const LoginPage = ({ onLogin }) => {
     setError("");
     if (!email.trim() || !password.trim()) { setError("Please enter your email and password."); return; }
     setLoading(true);
+    // Check admin first (supports username "admin" or email match)
+    const allUsers = [ADMIN_USER, ...users];
+    const input = email.trim().toLowerCase();
+    const user = allUsers.find(u => (u.email.toLowerCase() === input || u.name.toLowerCase() === input) && u.password === password);
+    if (user) { setTimeout(() => onLogin(user), 300); return; }
+    // Try backend
     try {
       const res = await fetch(`${API_URL}/api/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
       });
       const data = await res.json();
-      if (!res.ok) { setError(data.error || "Invalid email or password."); setLoading(false); return; }
-      // Store token and merge with local user data for colour/initials
+      if (!res.ok) { setError("Invalid email or password."); setLoading(false); return; }
       localStorage.setItem("ozotoken", data.token);
-      const localUser = ALL_USERS.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
-      const merged = localUser
-        ? { ...localUser, ...data.user, id: localUser.id }
-        : { ...data.user, id: data.user._id, initials: data.user.name.split(" ").map(n=>n[0]).join("").slice(0,2).toUpperCase(), color: "bg-indigo-500" };
-      onLogin(merged);
-    } catch (err) {
-      // Fallback to local auth if backend unreachable
-      const user = ALL_USERS.find(u => u.email.toLowerCase() === email.trim().toLowerCase() && u.password === password);
-      if (!user) { setError("Invalid email or password. Please try again."); setLoading(false); return; }
-      onLogin(user);
+      const matched = allUsers.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
+      onLogin(matched || { ...data.user, id: data.user._id, initials: data.user.name.split(" ").map(n=>n[0]).join("").slice(0,2).toUpperCase(), color:"bg-indigo-500" });
+    } catch {
+      setError("Invalid email or password.");
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-indigo-50 flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center mb-4">
-            <img src="/ozone-logo.jpg" alt="Ozone" className="h-14 object-contain" />
+          <div className="inline-flex items-center justify-center mb-4 bg-white rounded-2xl shadow-sm px-6 py-3 border border-gray-100">
+            <img src="/ozone-logo.jpg" alt="Ozone" className="h-10 object-contain" />
           </div>
           <h1 className="text-2xl font-bold text-gray-900">OzoTask</h1>
-          <p className="text-gray-500 text-sm mt-1">Team task delegation & management</p>
+          <p className="text-gray-400 text-sm mt-1">Task delegation & team management</p>
         </div>
-        <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-7">
-          <h2 className="text-base font-semibold text-gray-800 mb-5">Sign in to your account</h2>
+        <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-7">
+          <h2 className="text-base font-semibold text-gray-800 mb-5">Sign in</h2>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="text-xs font-semibold text-gray-500 block mb-1.5">Email address</label>
-              <input
-                type="email"
-                value={email}
-                onChange={e => { setEmail(e.target.value); setError(""); }}
+              <label className="text-xs font-semibold text-gray-500 block mb-1.5">Username / Email</label>
+              <input type="text" value={email} onChange={e=>{setEmail(e.target.value);setError("");}}
                 className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
-                placeholder="you@ozotask.com"
-                autoComplete="email"
-              />
+                placeholder="Username or email" autoComplete="username"/>
             </div>
             <div>
               <label className="text-xs font-semibold text-gray-500 block mb-1.5">Password</label>
               <div className="relative">
-                <input
-                  type={showPass ? "text" : "password"}
-                  value={password}
-                  onChange={e => { setPassword(e.target.value); setError(""); }}
+                <input type={showPass?"text":"password"} value={password} onChange={e=>{setPassword(e.target.value);setError("");}}
                   className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all pr-10"
-                  placeholder="Enter your password"
-                  autoComplete="current-password"
-                />
-                <button type="button" onClick={() => setShowPass(s => !s)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                  <Eye size={16} />
-                </button>
+                  placeholder="Enter your password" autoComplete="current-password"/>
+                <button type="button" onClick={()=>setShowPass(s=>!s)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><Eye size={16}/></button>
               </div>
             </div>
             {error && (
               <div className="flex items-center gap-2 bg-red-50 border border-red-100 rounded-xl px-3 py-2.5">
-                <AlertCircle size={14} className="text-red-500 flex-shrink-0" />
+                <AlertCircle size={14} className="text-red-500 flex-shrink-0"/>
                 <p className="text-xs text-red-600">{error}</p>
               </div>
             )}
             <button type="submit" disabled={loading}
-              className={`w-full py-2.5 rounded-xl text-sm font-semibold text-white transition-all shadow-sm ${loading ? "bg-indigo-400 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99]"}`}>
+              className={`w-full py-2.5 rounded-xl text-sm font-semibold text-white transition-all shadow-sm ${loading?"bg-indigo-400 cursor-not-allowed":"bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99]"}`}>
               {loading ? "Signing in..." : "Sign In"}
             </button>
           </form>
-          <div className="mt-5 pt-4 border-t border-gray-100">
-            <p className="text-xs text-gray-400 font-medium mb-2">Demo credentials:</p>
-            <div className="space-y-1">
-              {ALL_USERS.slice(0,3).map(u => (
-                <button key={u.id} onClick={() => { setEmail(u.email); setPassword(u.password); setError(""); }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-gray-50 transition-colors text-left group">
-                  <Avatar user={u} size="sm" />
-                  <div className="flex-1 min-w-0">
-                    <span className="text-xs font-medium text-gray-700">{u.name}</span>
-                    <span className="text-xs text-gray-400 ml-1.5 capitalize">({u.role})</span>
-                  </div>
-                  <span className="text-xs text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity">use →</span>
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
-        <p className="text-center text-xs text-gray-400 mt-4">OzoTask v1.0 · Built for Ozone</p>
+        <p className="text-center text-xs text-gray-400 mt-5">OzoTask · Powered by Ozone</p>
       </div>
     </div>
   );
@@ -618,25 +591,172 @@ const ProjectsView = ({ projects, tasks, users, currentUser, onCreateProject, on
   );
 };
 
-const TeamView = ({ users, tasks, currentUser }) => {
-  const visible = currentUser.role==="owner" ? users : users.filter(u=>u.team===currentUser.team);
+const UserModal = ({ open, onClose, user, onSubmit, onDelete }) => {
+  const empty = { name:"", email:"", password:"", role:"employee", designation:"", team:"Engineering", phone:"", color:"bg-blue-500" };
+  const [form, setForm] = useState(empty);
+  const [showPass, setShowPass] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const isEditing = !!user;
+
+  useEffect(() => {
+    if (open) { setForm(user ? { ...user } : empty); setDeleteConfirm(false); setShowPass(false); }
+  }, [open, user]);
+
+  const handleSubmit = () => {
+    if (!form.name.trim() || !form.email.trim() || (!isEditing && !form.password.trim())) return;
+    const initials = form.name.trim().split(" ").map(n=>n[0]).join("").toUpperCase().slice(0,2);
+    onSubmit({ ...form, initials });
+    onClose();
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title={isEditing ? "Edit Team Member" : "Add New Team Member"} width="max-w-lg">
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <div className="col-span-2">
+            <label className="text-xs font-semibold text-gray-600 block mb-1.5">Full Name *</label>
+            <input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400" placeholder="e.g. Rahul Sharma"/>
+          </div>
+          <div className="col-span-2">
+            <label className="text-xs font-semibold text-gray-600 block mb-1.5">Email Address *</label>
+            <input type="email" value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400" placeholder="rahul@company.com"/>
+          </div>
+          <div className="col-span-2">
+            <label className="text-xs font-semibold text-gray-600 block mb-1.5">{isEditing ? "New Password" : "Password *"} {isEditing && <span className="text-gray-400 font-normal">(leave blank to keep current)</span>}</label>
+            <div className="relative">
+              <input type={showPass?"text":"password"} value={form.password} onChange={e=>setForm(f=>({...f,password:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 pr-9" placeholder="Set login password"/>
+              <button type="button" onClick={()=>setShowPass(s=>!s)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><Eye size={14}/></button>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-gray-600 block mb-1.5">Role *</label>
+            <select value={form.role} onChange={e=>setForm(f=>({...f,role:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400">
+              {ROLES.filter(r=>r!=="owner").map(r=><option key={r} value={r} className="capitalize">{r.charAt(0).toUpperCase()+r.slice(1)}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-gray-600 block mb-1.5">Team</label>
+            <select value={form.team} onChange={e=>setForm(f=>({...f,team:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400">
+              {TEAMS.map(t=><option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+          <div className="col-span-2">
+            <label className="text-xs font-semibold text-gray-600 block mb-1.5">Designation</label>
+            <select value={form.designation} onChange={e=>setForm(f=>({...f,designation:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400">
+              <option value="">Select designation</option>
+              {DESIGNATIONS.map(d=><option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-gray-600 block mb-1.5">Phone</label>
+            <input value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400" placeholder="+91 98765 43210"/>
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-gray-600 block mb-1.5">Avatar Color</label>
+            <div className="flex flex-wrap gap-2 border border-gray-200 rounded-lg p-2">
+              {USER_COLORS.map(c=><button key={c} type="button" onClick={()=>setForm(f=>({...f,color:c}))} className={`w-6 h-6 rounded-full ${c} transition-all ${form.color===c?"ring-2 ring-offset-1 ring-indigo-400 scale-110":""}`}/>)}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+          {isEditing ? (
+            deleteConfirm
+              ? <div className="flex items-center gap-2"><span className="text-xs text-red-600">Remove this member?</span><Btn variant="danger" size="sm" onClick={()=>{onDelete(user.id);onClose();}}>Yes, Remove</Btn><Btn variant="secondary" size="sm" onClick={()=>setDeleteConfirm(false)}>Cancel</Btn></div>
+              : <Btn variant="danger" size="sm" onClick={()=>setDeleteConfirm(true)}><Trash2 size={13}/>Remove</Btn>
+          ) : <div/>}
+          <div className="flex gap-2">
+            <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+            <Btn onClick={handleSubmit} disabled={!form.name.trim()||!form.email.trim()||(!isEditing&&!form.password.trim())}>{isEditing?"Save Changes":"Add Member"}</Btn>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
+const TeamView = ({ users, setUsers, tasks, currentUser }) => {
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState(null);
+  const [search, setSearch] = useState("");
+  const isAdmin = currentUser.role === "owner";
+  const allMembers = [ADMIN_USER, ...users];
+  const visible = isAdmin ? allMembers : allMembers.filter(u => u.team === currentUser.team);
+  const filtered = visible.filter(u => u.name.toLowerCase().includes(search.toLowerCase()) || u.email.toLowerCase().includes(search.toLowerCase()) || (u.designation||"").toLowerCase().includes(search.toLowerCase()));
+
+  const handleSubmit = (form) => {
+    if (editingUser) {
+      setUsers(prev => prev.map(u => u.id === editingUser.id ? { ...u, ...form, password: form.password || u.password } : u));
+    } else {
+      const newUser = { ...form, id: Date.now() };
+      setUsers(prev => [...prev, newUser]);
+    }
+    setEditingUser(null);
+  };
+  const handleDelete = (id) => setUsers(prev => prev.filter(u => u.id !== id));
+
   return (
     <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex items-center justify-between mb-5 gap-3 flex-wrap">
+        <div className="relative flex-1 min-w-[200px] max-w-xs">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
+          <input value={search} onChange={e=>setSearch(e.target.value)} className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-400" placeholder="Search members..."/>
+        </div>
+        {isAdmin && <Btn onClick={()=>{ setEditingUser(null); setModalOpen(true); }}><Plus size={15}/>Add Member</Btn>}
+      </div>
+
+      {/* Summary bar for admin */}
+      {isAdmin && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+          {[["Total Members", allMembers.length, "bg-indigo-50 text-indigo-700"],["Managers", allMembers.filter(u=>u.role==="manager").length, "bg-blue-50 text-blue-700"],["Employees", allMembers.filter(u=>u.role==="employee").length, "bg-green-50 text-green-700"],["Teams", [...new Set(allMembers.map(u=>u.team))].length, "bg-orange-50 text-orange-700"]].map(([label,val,cls])=>(
+            <div key={label} className={`rounded-xl p-3 text-center ${cls}`}><div className="text-xl font-bold">{val}</div><div className="text-xs mt-0.5">{label}</div></div>
+          ))}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {visible.map(u=>{
-          const assigned=tasks.filter(t=>t.assignees.includes(u.id));
-          const doneCount=assigned.filter(t=>t.status==="done").length;
-          const activeCount=assigned.filter(t=>t.status==="inprogress").length;
-          const overdueCount=assigned.filter(t=>isOverdue(t.dueDate,t.status)).length;
-          return(
-            <div key={u.id} className="bg-white rounded-2xl border border-gray-100 p-5">
-              <div className="flex items-center gap-3 mb-4"><Avatar user={u} size="xl"/><div><div className="font-semibold text-gray-900">{u.name}</div><div className="text-xs text-gray-400 capitalize">{u.role} · {u.team}</div><div className="text-xs text-gray-400 flex items-center gap-1 mt-0.5"><Phone size={10}/>{u.phone}</div></div></div>
-              <div className="grid grid-cols-3 gap-2 mb-3"><div className="text-center bg-blue-50 rounded-xl py-2"><div className="text-lg font-bold text-blue-700">{activeCount}</div><div className="text-xs text-blue-500">Active</div></div><div className="text-center bg-green-50 rounded-xl py-2"><div className="text-lg font-bold text-green-700">{doneCount}</div><div className="text-xs text-green-500">Done</div></div><div className="text-center bg-red-50 rounded-xl py-2"><div className="text-lg font-bold text-red-700">{overdueCount}</div><div className="text-xs text-red-500">Overdue</div></div></div>
-              <div className="flex gap-1.5"><a href={`https://wa.me/${u.phone.replace(/\D/g,"")}`} target="_blank" rel="noreferrer" className="flex-1 flex items-center justify-center gap-1.5 bg-green-50 text-green-700 text-xs font-medium py-2 rounded-xl hover:bg-green-100 transition-colors"><MessageCircle size={12}/>WhatsApp</a><a href={`mailto:${u.email}`} className="flex-1 flex items-center justify-center gap-1.5 bg-gray-50 text-gray-700 text-xs font-medium py-2 rounded-xl hover:bg-gray-100 transition-colors"><Mail size={12}/>Email</a></div>
+        {filtered.map(u => {
+          const assigned = tasks.filter(t => t.assignees.includes(u.id));
+          const doneCount = assigned.filter(t=>t.status==="done").length;
+          const activeCount = assigned.filter(t=>t.status==="inprogress").length;
+          const overdueCount = assigned.filter(t=>isOverdue(t.dueDate,t.status)).length;
+          const isOwner = u.id === ADMIN_USER.id;
+          return (
+            <div key={u.id} className="bg-white rounded-2xl border border-gray-100 p-5 hover:shadow-sm transition-all">
+              <div className="flex items-start justify-between mb-3">
+                <div className="flex items-center gap-3">
+                  <Avatar user={u} size="xl"/>
+                  <div>
+                    <div className="font-semibold text-gray-900">{u.name}</div>
+                    <div className="text-xs text-indigo-600 font-medium">{u.designation || u.role}</div>
+                    <div className="text-xs text-gray-400 capitalize mt-0.5">{u.team} · {u.role}</div>
+                  </div>
+                </div>
+                {isAdmin && !isOwner && (
+                  <button onClick={()=>{ setEditingUser(u); setModalOpen(true); }} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors"><Edit3 size={14}/></button>
+                )}
+                {isOwner && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded-full font-medium">Admin</span>}
+              </div>
+              {u.phone && <div className="text-xs text-gray-400 flex items-center gap-1 mb-3"><Phone size={10}/>{u.phone}</div>}
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                <div className="text-center bg-blue-50 rounded-xl py-2"><div className="text-lg font-bold text-blue-700">{activeCount}</div><div className="text-xs text-blue-500">Active</div></div>
+                <div className="text-center bg-green-50 rounded-xl py-2"><div className="text-lg font-bold text-green-700">{doneCount}</div><div className="text-xs text-green-500">Done</div></div>
+                <div className="text-center bg-red-50 rounded-xl py-2"><div className="text-lg font-bold text-red-700">{overdueCount}</div><div className="text-xs text-red-500">Overdue</div></div>
+              </div>
+              <div className="flex gap-1.5">
+                {u.phone && <a href={`https://wa.me/${u.phone.replace(/\D/g,"")}`} target="_blank" rel="noreferrer" className="flex-1 flex items-center justify-center gap-1.5 bg-green-50 text-green-700 text-xs font-medium py-2 rounded-xl hover:bg-green-100 transition-colors"><MessageCircle size={12}/>WhatsApp</a>}
+                <a href={`mailto:${u.email}`} className="flex-1 flex items-center justify-center gap-1.5 bg-gray-50 text-gray-700 text-xs font-medium py-2 rounded-xl hover:bg-gray-100 transition-colors"><Mail size={12}/>Email</a>
+              </div>
             </div>
           );
         })}
+        {filtered.length === 0 && (
+          <div className="col-span-3 text-center py-16 text-gray-300">
+            <Users size={36} className="mx-auto mb-3"/>
+            <p className="font-medium">No members found</p>
+          </div>
+        )}
       </div>
+      <UserModal open={modalOpen} onClose={()=>{ setModalOpen(false); setEditingUser(null); }} user={editingUser} onSubmit={handleSubmit} onDelete={handleDelete}/>
     </div>
   );
 };
@@ -691,13 +811,30 @@ const NotificationsView = ({ notifications, setNotifications, tasks, users, curr
   );
 };
 
+function usePersistedState(key, fallback) {
+  const [state, setState] = useState(() => {
+    try {
+      const stored = localStorage.getItem(key);
+      return stored ? JSON.parse(stored) : fallback;
+    } catch { return fallback; }
+  });
+  const setPersisted = (value) => {
+    setState(prev => {
+      const next = typeof value === "function" ? value(prev) : value;
+      try { localStorage.setItem(key, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+  return [state, setPersisted];
+}
+
 export default function App() {
-  const [currentUser, setCurrentUser] = useState(null);
+  const [currentUser, setCurrentUser] = usePersistedState("ozo_user", null);
   const [view, setView] = useState("dashboard");
-  const [tasks, setTasks] = useState(TASKS_INIT);
-  const [projects, setProjects] = useState(PROJECTS_INIT);
-  const [users] = useState(ALL_USERS);
-  const [notifications, setNotifications] = useState(NOTIFS_INIT);
+  const [tasks, setTasks] = usePersistedState("ozo_tasks", TASKS_INIT);
+  const [projects, setProjects] = usePersistedState("ozo_projects", PROJECTS_INIT);
+  const [users, setUsers] = usePersistedState("ozo_users", []);
+  const [notifications, setNotifications] = usePersistedState("ozo_notifs", NOTIFS_INIT);
   const [collapsed, setCollapsed] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [detailTask, setDetailTask] = useState(null);
@@ -705,22 +842,55 @@ export default function App() {
   const unreadCount = notifications.filter(n=>!n.read).length;
   const viewTitles = { dashboard:"Dashboard", tasks:"Tasks", projects:"Projects", team:"Team", notifications:"Notifications" };
 
+  const sendEmailNotify = async (type, payload) => {
+    try {
+      await fetch(`${API_URL}/api/notify/${type}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch (e) { console.warn("[Notify] email send failed:", e.message); }
+  };
+
   const handleCreateTask = (form) => {
     const newTask = { id:Date.now(), ...form, createdBy:currentUser.id, createdAt:new Date().toISOString().split("T")[0], updatedAt:new Date().toISOString().split("T")[0], status:"todo", comments:[] };
     setTasks(prev=>[...prev,newTask]);
     const ts = new Date().toISOString();
-    form.assignees.forEach(userId=>{
-      const u = getUserById(userId, users);
-      if (!u) return;
-      const proj = projects.find(p=>p.id===form.projectId);
-      setNotifications(prev=>[...prev,{id:Date.now()+Math.random(),type:"email",taskId:newTask.id,toUser:userId,subject:`New Task Assigned: ${form.title}`,body:`Hi ${u.name}, you've been assigned '${form.title}'${proj?` on ${proj.name}`:""}.`,ts,read:false,direction:"sent"}]);
-      setNotifications(prev=>[...prev,{id:Date.now()+Math.random(),type:"whatsapp",taskId:newTask.id,toUser:userId,message:`📋 *New Task Assigned*\n\nHi ${u.name}!\n*${form.title}*\n📅 Due: ${fmtDate(form.dueDate)}\n\nReply: ✅ done | ▶️ start | ❓ help`,ts,read:false,direction:"sent",status:"delivered"}]);
+    const proj = projects.find(p=>p.id===form.projectId);
+    const assigneeUsers = form.assignees.map(id=>getUserById(id, allUsers)).filter(Boolean);
+
+    // Send real emails
+    sendEmailNotify("task-assigned", {
+      task: { ...form, id: newTask.id },
+      assignees: assigneeUsers.filter(u=>u.email&&u.email.includes("@")).map(u=>({ name:u.name, email:u.email })),
+      assignedBy: { name: currentUser.name },
+      project: proj ? { name: proj.name, emoji: proj.emoji } : null,
+    });
+
+    // In-app notifications
+    assigneeUsers.forEach(u => {
+      setNotifications(prev=>[...prev,{id:Date.now()+Math.random(),type:"email",taskId:newTask.id,toUser:u.id,subject:`New Task Assigned: ${form.title}`,body:`Hi ${u.name}, you've been assigned '${form.title}'${proj?` on ${proj.name}`:""}.`,ts,read:false,direction:"sent"}]);
+      setNotifications(prev=>[...prev,{id:Date.now()+Math.random(),type:"whatsapp",taskId:newTask.id,toUser:u.id,message:`📋 *New Task Assigned*\n\nHi ${u.name}!\n*${form.title}*\n📅 Due: ${fmtDate(form.dueDate)}\n\nReply: ✅ done | ▶️ start | ❓ help`,ts,read:false,direction:"sent",status:"delivered"}]);
     });
   };
 
   const handleUpdateTask = (taskId, updates) => {
     setTasks(prev=>prev.map(t=>t.id===taskId?{...t,...updates,updatedAt:new Date().toISOString().split("T")[0]}:t));
     if (detailTask?.id===taskId) setDetailTask(prev=>({...prev,...updates}));
+    // Send "task completed" email to the creator when status → done
+    if (updates.status === "done") {
+      const task = tasks.find(t=>t.id===taskId);
+      if (task) {
+        const creator = getUserById(task.createdBy, allUsers);
+        if (creator && creator.email && creator.email.includes("@")) {
+          sendEmailNotify("task-completed", {
+            task: { title: task.title },
+            completedBy: { name: currentUser.name },
+            notifyUsers: [{ name: creator.name, email: creator.email }],
+          });
+        }
+      }
+    }
   };
 
   const handleCreateProject = (form) => {
@@ -735,21 +905,23 @@ export default function App() {
     setTasks(prev=>prev.filter(t=>t.projectId!==projectId));
   };
 
-  if (!currentUser) return <LoginPage onLogin={u=>{setCurrentUser(u);setView("dashboard");}}/>;
+  const allUsers = [ADMIN_USER, ...users];
+
+  if (!currentUser) return <LoginPage onLogin={u=>{setCurrentUser(u);setView("dashboard");}} users={users}/>;
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden font-sans">
       <Sidebar currentUser={currentUser} view={view} setView={setView} unreadCount={unreadCount} collapsed={collapsed} setCollapsed={setCollapsed}/>
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-        <Header title={viewTitles[view]} currentUser={currentUser} onLogout={()=>setCurrentUser(null)} onCollapse={()=>setCollapsed(c=>!c)}/>
+        <Header title={viewTitles[view]} currentUser={currentUser} onLogout={()=>{ localStorage.removeItem("ozo_user"); setCurrentUser(null); }} onCollapse={()=>setCollapsed(c=>!c)}/>
         {view==="dashboard"&&<DashboardView currentUser={currentUser} tasks={tasks} projects={projects} notifications={notifications} setView={setView} openCreateTask={()=>setCreateOpen(true)}/>}
-        {view==="tasks"&&<TasksView currentUser={currentUser} tasks={tasks} projects={projects} users={users} openCreateTask={()=>setCreateOpen(true)} openTaskDetail={setDetailTask}/>}
-        {view==="projects"&&<ProjectsView projects={projects} tasks={tasks} users={users} currentUser={currentUser} onCreateProject={handleCreateProject} onEditProject={handleEditProject} onDeleteProject={handleDeleteProject}/>}
-        {view==="team"&&<TeamView users={users} tasks={tasks} currentUser={currentUser}/>}
-        {view==="notifications"&&<NotificationsView notifications={notifications} setNotifications={setNotifications} tasks={tasks} users={users} currentUser={currentUser}/>}
+        {view==="tasks"&&<TasksView currentUser={currentUser} tasks={tasks} projects={projects} users={allUsers} openCreateTask={()=>setCreateOpen(true)} openTaskDetail={setDetailTask}/>}
+        {view==="projects"&&<ProjectsView projects={projects} tasks={tasks} users={allUsers} currentUser={currentUser} onCreateProject={handleCreateProject} onEditProject={handleEditProject} onDeleteProject={handleDeleteProject}/>}
+        {view==="team"&&<TeamView users={users} setUsers={setUsers} tasks={tasks} currentUser={currentUser}/>}
+        {view==="notifications"&&<NotificationsView notifications={notifications} setNotifications={setNotifications} tasks={tasks} users={allUsers} currentUser={currentUser}/>}
       </div>
-      <CreateTaskModal open={createOpen} onClose={()=>setCreateOpen(false)} currentUser={currentUser} projects={projects} users={users} onSubmit={handleCreateTask}/>
-      <TaskDetailModal open={!!detailTask} onClose={()=>setDetailTask(null)} task={detailTask} projects={projects} users={users} currentUser={currentUser} onUpdate={handleUpdateTask} onDelete={(id)=>setTasks(prev=>prev.filter(t=>t.id!==id))}/>
+      <CreateTaskModal open={createOpen} onClose={()=>setCreateOpen(false)} currentUser={currentUser} projects={projects} users={allUsers} onSubmit={handleCreateTask}/>
+      <TaskDetailModal open={!!detailTask} onClose={()=>setDetailTask(null)} task={detailTask} projects={projects} users={allUsers} currentUser={currentUser} onUpdate={handleUpdateTask} onDelete={(id)=>setTasks(prev=>prev.filter(t=>t.id!==id))}/>
     </div>
   );
 }
