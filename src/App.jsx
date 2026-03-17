@@ -110,49 +110,86 @@ const Modal = ({ open, onClose, title, children, width="max-w-lg" }) => {
   );
 };
 
-const LoginPage = ({ onLogin, users }) => {
+const LoginPage = ({ onLogin, users, onSyncUsers }) => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPass, setShowPass] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // Fetch latest user list from backend and sync to localStorage
+  const fetchBackendUsers = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/admin/users`, {
+        headers: { "x-admin-key": ADMIN_KEY },
+      });
+      if (!res.ok) return [];
+      const backendUsers = await res.json();
+      return backendUsers.map((u, i) => ({
+        id: u._id,
+        backendId: u._id,
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        team: u.team || "General",
+        phone: u.phone || "",
+        designation: u.designation || "",
+        initials: u.initials || u.name.split(" ").map(n=>n[0]).join("").slice(0,2).toUpperCase(),
+        color: ["bg-blue-500","bg-pink-500","bg-green-500","bg-orange-500","bg-teal-500","bg-indigo-500"][i % 6],
+        password: null, // password not exposed from backend
+      }));
+    } catch { return []; }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
-    if (!email.trim() || !password.trim()) { setError("Please enter your email and password."); return; }
+    if (!email.trim() || !password.trim()) { setError("Please enter your username and password."); return; }
     setLoading(true);
-    // Check admin first (supports username "admin" or email match)
-    const allUsers = [ADMIN_USER, ...users];
     const input = email.trim().toLowerCase();
-    const user = allUsers.find(u => (u.email.toLowerCase() === input || u.name.toLowerCase() === input) && u.password === password);
-    if (user) { localStorage.setItem("ozotoken", "local"); setTimeout(() => onLogin(user), 300); return; }
-    // Try backend (for users created on other devices or via backend)
+
+    // Step 1: Check @admin locally
+    if ((ADMIN_USER.email.toLowerCase() === input || ADMIN_USER.name.toLowerCase() === input) && ADMIN_USER.password === password) {
+      // Sync all backend users to local storage when admin logs in
+      const backendUsers = await fetchBackendUsers();
+      if (backendUsers.length && onSyncUsers) onSyncUsers(backendUsers);
+      localStorage.setItem("ozotoken", "local");
+      setTimeout(() => onLogin(ADMIN_USER), 300);
+      return;
+    }
+
+    // Step 2: Check local users (same device)
+    const localMatch = users.find(u => u.email.toLowerCase() === input && u.password === password);
+    if (localMatch) {
+      localStorage.setItem("ozotoken", "local");
+      setTimeout(() => onLogin(localMatch), 300);
+      return;
+    }
+
+    // Step 3: Sync users from backend then re-check (different device)
+    const backendUsers = await fetchBackendUsers();
+    if (backendUsers.length && onSyncUsers) onSyncUsers(backendUsers);
+
+    // Step 4: Try backend auth (validates password via bcrypt)
     try {
       const res = await fetch(`${API_URL}/api/auth/login`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
+        body: JSON.stringify({ email: input, password }),
       });
       const data = await res.json();
       if (!res.ok) { setError("Invalid email or password."); setLoading(false); return; }
       localStorage.setItem("ozotoken", data.token);
-      // Build a user object compatible with the app
-      const backendUser = {
-        id: data.user._id,
-        backendId: data.user._id,
-        name: data.user.name,
-        email: data.user.email,
-        role: data.user.role,
-        team: data.user.team || "General",
-        phone: data.user.phone || "",
+      // Find the synced user to get full profile (color, initials, etc.)
+      const synced = backendUsers.find(u => u.email.toLowerCase() === input);
+      const backendUser = synced || {
+        id: data.user._id, backendId: data.user._id,
+        name: data.user.name, email: data.user.email,
+        role: data.user.role, team: data.user.team || "General",
+        phone: data.user.phone || "", designation: data.user.designation || "",
         initials: data.user.name.split(" ").map(n=>n[0]).join("").slice(0,2).toUpperCase(),
         color: "bg-indigo-500",
-        designation: data.user.designation || data.user.role,
-        password,
       };
-      // Merge with local users list if present
-      const matched = allUsers.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
-      onLogin(matched || backendUser);
+      onLogin(backendUser);
     } catch {
       setError("Invalid email or password.");
       setLoading(false);
@@ -1185,7 +1222,15 @@ export default function App() {
 
   const allUsers = [ADMIN_USER, ...users];
 
-  if (!currentUser) return <LoginPage onLogin={u=>{setCurrentUser(u);setView("dashboard");}} users={users}/>;
+  if (!currentUser) return <LoginPage
+    onLogin={u=>{setCurrentUser(u);setView("dashboard");}}
+    users={users}
+    onSyncUsers={backendUsers => setUsers(prev => {
+      const existingEmails = new Set(prev.map(u => u.email.toLowerCase()));
+      const newOnes = backendUsers.filter(u => !existingEmails.has(u.email.toLowerCase()));
+      return newOnes.length ? [...prev, ...newOnes] : prev;
+    })}
+  />;
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden font-sans">
