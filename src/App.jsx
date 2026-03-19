@@ -1089,13 +1089,11 @@ function usePersistedState(key, fallback) {
 }
 
 export default function App() {
-  // One-time migration: clear old demo data
+  // Migration v3: clear all stale localStorage so backend becomes the single source of truth
   useEffect(() => {
-    if (!localStorage.getItem("ozo_migrated_v2")) {
-      localStorage.removeItem("ozo_tasks");
-      localStorage.removeItem("ozo_projects");
-      localStorage.removeItem("ozo_notifs");
-      localStorage.setItem("ozo_migrated_v2", "1");
+    if (!localStorage.getItem("ozo_migrated_v3")) {
+      ["ozo_tasks","ozo_projects","ozo_users","ozo_notifs"].forEach(k => localStorage.removeItem(k));
+      localStorage.setItem("ozo_migrated_v3", "1");
     }
   }, []);
 
@@ -1125,8 +1123,8 @@ export default function App() {
     } catch (e) { console.warn("[Notify] email send failed:", e.message); }
   };
 
-  // Fetch tasks from backend and merge — no duplicates, maps assignees by email
-  const syncTasksFromBackend = async (user, currentAllUsers) => {
+  // Backend is the single source of truth — fully replace local state from backend each sync
+  const syncTasksFromBackend = async (user) => {
     if (!user?.email || !user.email.includes("@")) return;
     try {
       const isAdmin = user.role === "owner";
@@ -1137,138 +1135,113 @@ export default function App() {
       const res = await fetch(url, { headers });
       if (!res.ok) return;
       const backendTasks = await res.json();
-      if (!backendTasks.length) return;
-
-      const usersRef = currentAllUsers || allUsers;
-
+      // Replace backend-confirmed tasks; keep locally-created ones still awaiting save
+      const usersSnap = allUsers;
+      const fromBackend = backendTasks.map(bt => ({
+        id: bt.localId ? Number(bt.localId) : bt._id,
+        backendId: bt._id,
+        title: bt.title,
+        description: bt.description || "",
+        projectId: bt.projectId,
+        assignees: (bt.assigneeEmails || []).map(email => {
+          const u = usersSnap.find(u => u.email?.toLowerCase() === email.toLowerCase());
+          return u ? u.id : null;
+        }).filter(id => id !== null),
+        assigneeEmails: bt.assigneeEmails || [],
+        status: bt.status || "todo",
+        priority: bt.priority || "medium",
+        dueDate: bt.dueDate,
+        createdBy: bt.createdBy,
+        createdByName: bt.createdByName,
+        type: bt.type || "individual",
+        autoFollowUp: bt.autoFollowUp,
+        comments: bt.comments || [],
+        createdAt: bt.createdAt,
+        updatedAt: bt.updatedAt,
+      }));
       setTasks(prev => {
-        // Deduplicate by backendId and localId
-        const knownBackendIds = new Set(prev.map(t => t.backendId).filter(Boolean));
-        const knownLocalIds   = new Set(prev.map(t => String(t.id)));
-
-        // Update status/comments on tasks we already have
-        const updated = prev.map(t => {
-          const match = backendTasks.find(bt =>
-            bt._id === t.backendId || String(bt.localId) === String(t.id)
-          );
-          if (!match) return t;
-          // Stamp backendId if missing
-          return { ...t, backendId: match._id, status: match.status, comments: match.comments || t.comments };
-        });
-
-        // Add tasks we don't have yet
-        const toAdd = backendTasks.filter(bt =>
-          !knownBackendIds.has(bt._id) && !knownLocalIds.has(String(bt.localId))
-        );
-
-        const newTasks = toAdd.map(bt => ({
-          id: bt.localId ? Number(bt.localId) : Date.now() + Math.random(),
-          backendId: bt._id,
-          title: bt.title,
-          description: bt.description || "",
-          projectId: bt.projectId,
-          // Map assignee emails → local user IDs so UI renders them correctly
-          assignees: (bt.assigneeEmails || []).map(email => {
-            const u = usersRef.find(u => u.email?.toLowerCase() === email.toLowerCase());
-            return u ? u.id : null;
-          }).filter(id => id !== null),
-          assigneeEmails: bt.assigneeEmails || [],
-          status: bt.status || "todo",
-          priority: bt.priority || "medium",
-          dueDate: bt.dueDate,
-          createdBy: bt.createdBy,
-          createdByName: bt.createdByName,
-          type: bt.type || "individual",
-          autoFollowUp: bt.autoFollowUp,
-          comments: bt.comments || [],
-          createdAt: bt.createdAt,
-          updatedAt: bt.updatedAt,
-        }));
-
-        return [...updated, ...newTasks];
+        const pending = prev.filter(t => !t.backendId); // items still being saved to backend
+        const backendLocalIds = new Set(fromBackend.map(t => String(t.id)));
+        const uniquePending = pending.filter(t => !backendLocalIds.has(String(t.id)));
+        return [...fromBackend, ...uniquePending];
       });
     } catch {}
   };
 
-  // Sync projects from backend and merge into local state
   const syncProjectsFromBackend = async () => {
     try {
       const res = await fetch(`${API_URL}/api/shared/projects`);
       if (!res.ok) return;
       const backendProjects = await res.json();
-      if (!backendProjects.length) return;
+      const fromBackend = backendProjects.map(bp => ({
+        id: bp.localId ? Number(bp.localId) : bp._id,
+        backendId: bp._id,
+        name: bp.name,
+        description: bp.description || "",
+        emoji: bp.emoji || "📁",
+        color: bp.color || "bg-blue-500",
+        deadline: bp.deadline,
+        owner: bp.owner,
+        members: bp.members || [],
+        createdAt: bp.createdAt,
+      }));
       setProjects(prev => {
-        const knownBackendIds = new Set(prev.map(p => p.backendId).filter(Boolean));
-        // Update existing projects
-        const updated = prev.map(p => {
-          const match = backendProjects.find(bp => bp._id === p.backendId || String(bp.localId) === String(p.id));
-          if (!match) return p;
-          return { ...p, backendId: match._id, name: match.name, description: match.description, emoji: match.emoji, color: match.color, deadline: match.deadline, members: match.members };
-        });
-        // Add new ones from backend
-        const toAdd = backendProjects.filter(bp => !knownBackendIds.has(bp._id) && !prev.find(p => String(p.id) === String(bp.localId)));
-        const newProjs = toAdd.map(bp => ({
-          id: bp.localId ? Number(bp.localId) : Date.now() + Math.random(),
-          backendId: bp._id,
-          name: bp.name, description: bp.description || "",
-          emoji: bp.emoji || "📁", color: bp.color || "bg-blue-500",
-          deadline: bp.deadline, owner: bp.owner, members: bp.members || [],
-          createdAt: bp.createdAt,
-        }));
-        return [...updated, ...newProjs];
+        const pending = prev.filter(p => !p.backendId);
+        const backendLocalIds = new Set(fromBackend.map(p => String(p.id)));
+        const uniquePending = pending.filter(p => !backendLocalIds.has(String(p.id)));
+        return [...fromBackend, ...uniquePending];
       });
     } catch {}
   };
 
-  // Sync users from backend into local list
   const syncUsersFromBackend = async () => {
     try {
       const res = await fetch(`${API_URL}/api/admin/users`, { headers: { "x-admin-key": ADMIN_KEY } });
       if (!res.ok) return;
       const backendUsers = await res.json();
       if (!backendUsers.length) return;
-      setUsers(prev => {
-        const existingEmails = new Set(prev.map(u => u.email.toLowerCase()));
-        const newOnes = backendUsers
-          .filter(u => !existingEmails.has(u.email.toLowerCase()))
-          .map((u, i) => ({
-            id: u._id, backendId: u._id,
-            name: u.name, email: u.email, role: u.role,
-            team: u.team || "General", phone: u.phone || "",
-            designation: u.designation || "", reportsTo: u.reportsTo || "",
-            initials: u.initials || u.name.split(" ").map(n=>n[0]).join("").slice(0,2).toUpperCase(),
-            color: ["bg-blue-500","bg-pink-500","bg-green-500","bg-orange-500","bg-teal-500","bg-indigo-500"][(prev.length + i) % 6],
-            password: null,
-          }));
-        // Also update existing users in case their role/designation changed
-        const updatedExisting = prev.map(p => {
-          const match = backendUsers.find(bu => bu.email.toLowerCase() === p.email.toLowerCase());
-          if (!match) return p;
-          return { ...p, name: match.name, role: match.role, team: match.team || p.team, phone: match.phone || p.phone, designation: match.designation || p.designation, reportsTo: match.reportsTo || p.reportsTo };
-        });
-        return newOnes.length ? [...updatedExisting, ...newOnes] : updatedExisting;
-      });
+      const COLORS = ["bg-blue-500","bg-pink-500","bg-green-500","bg-orange-500","bg-teal-500","bg-indigo-500"];
+      setUsers(backendUsers.map((u, i) => ({
+        id: u._id, backendId: u._id,
+        name: u.name, email: u.email, role: u.role,
+        team: u.team || "General", phone: u.phone || "",
+        designation: u.designation || "", reportsTo: u.reportsTo || "",
+        initials: u.initials || u.name.split(" ").map(n=>n[0]).join("").slice(0,2).toUpperCase(),
+        color: COLORS[i % COLORS.length],
+        password: null,
+      })));
     } catch {}
   };
 
-  // On every login: clear stale browser cache, pull everything fresh from backend
-  // This ensures different browsers/devices always see the same data
+  // On login: fetch fresh data then open SSE for real-time push from backend
   useEffect(() => {
     if (!currentUser) return;
-    // Wipe local cache so we don't mix stale localStorage data with fresh backend data
-    setTasks([]);
-    setProjects([]);
-    // Fetch fresh from backend immediately after clearing
+
+    // Initial load
     syncUsersFromBackend();
     syncProjectsFromBackend();
     syncTasksFromBackend(currentUser);
-    // Keep polling every 30s so changes from other devices show up without refresh
-    const interval = setInterval(() => {
+
+    // SSE — backend pushes an event the instant any data changes
+    let es = null;
+    const connectSSE = () => {
+      es = new EventSource(`${API_URL}/api/events`);
+      es.addEventListener("tasks",    () => syncTasksFromBackend(currentUser));
+      es.addEventListener("projects", () => syncProjectsFromBackend());
+      es.addEventListener("users",    () => syncUsersFromBackend());
+      // On error/disconnect, retry after 5s
+      es.onerror = () => { es.close(); setTimeout(connectSSE, 5000); };
+    };
+    connectSSE();
+
+    // Safety-net poll every 60s in case an SSE event is missed
+    const poll = setInterval(() => {
       syncTasksFromBackend(currentUser);
       syncProjectsFromBackend();
       syncUsersFromBackend();
-    }, 30000);
-    return () => clearInterval(interval);
+    }, 60000);
+
+    return () => { if (es) es.close(); clearInterval(poll); };
   }, [currentUser?.id]);
 
   const handleCreateTask = async (form) => {
