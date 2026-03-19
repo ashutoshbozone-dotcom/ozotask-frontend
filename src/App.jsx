@@ -1133,7 +1133,8 @@ export default function App() {
         : `${API_URL}/api/shared/tasks?email=${encodeURIComponent(user.email)}`;
       const headers = isAdmin ? { "x-admin-key": ADMIN_KEY } : {};
       const res = await fetch(url, { headers });
-      if (!res.ok) return;
+      console.log("[sync tasks]", url, res.status);
+      if (!res.ok) { console.error("[sync tasks] failed", res.status, await res.text().catch(()=>"")); return; }
       const backendTasks = await res.json();
       // Replace backend-confirmed tasks; keep locally-created ones still awaiting save
       const usersSnap = allUsers;
@@ -1171,7 +1172,8 @@ export default function App() {
   const syncProjectsFromBackend = async () => {
     try {
       const res = await fetch(`${API_URL}/api/shared/projects`);
-      if (!res.ok) return;
+      console.log("[sync projects]", res.status);
+      if (!res.ok) { console.error("[sync projects] failed", res.status, await res.text().catch(()=>"")); return; }
       const backendProjects = await res.json();
       const fromBackend = backendProjects.map(bp => ({
         id: bp.localId ? Number(bp.localId) : bp._id,
@@ -1275,10 +1277,12 @@ export default function App() {
       });
       if (res.ok) {
         const saved = await res.json();
-        // Stamp backendId on local task so sync won't duplicate it
+        console.log("[create task] saved to backend", saved._id);
         setTasks(prev => prev.map(t => t.id === localId ? { ...t, backendId: saved._id } : t));
+      } else {
+        console.error("[create task] backend save failed", res.status, await res.text().catch(()=>""));
       }
-    } catch {}
+    } catch (e) { console.error("[create task] error", e.message); }
 
     const ts = new Date().toISOString();
     const proj = projects.find(p=>p.id===form.projectId);
@@ -1339,9 +1343,12 @@ export default function App() {
       });
       if (res.ok) {
         const saved = await res.json();
+        console.log("[create project] saved to backend", saved._id);
         setProjects(prev => prev.map(p => p.id === localId ? { ...p, backendId: saved._id } : p));
+      } else {
+        console.error("[create project] backend save failed", res.status, await res.text().catch(()=>""));
       }
-    } catch {}
+    } catch (e) { console.error("[create project] error", e.message); }
   };
   const handleEditProject = async (projectId, form) => {
     setProjects(prev => prev.map(p => p.id === projectId ? { ...p, ...form } : p));
