@@ -1270,6 +1270,7 @@ export default function App() {
           status: "todo", priority: form.priority, type: form.type,
           dueDate: form.dueDate, autoFollowUp: form.autoFollowUp,
           createdBy: currentUser.id, createdByName: currentUser.name,
+          createdByEmail: currentUser.email?.toLowerCase(),
         }),
       });
       if (res.ok) {
@@ -1304,9 +1305,9 @@ export default function App() {
     // Push update to backend so all devices see the new status/comments
     const task = tasks.find(t=>t.id===taskId);
     if (task?.backendId) {
-      fetch(`${API_URL}/api/shared/tasks/${task.backendId}?email=${encodeURIComponent(currentUser.email)}`, {
+      fetch(`${API_URL}/api/shared/tasks/${task.backendId}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-admin-key": ADMIN_KEY },
         body: JSON.stringify(updates),
       }).catch(()=>{});
     }
@@ -1398,7 +1399,12 @@ export default function App() {
         {view==="settings"&&<SettingsView teams={teams} setTeams={setTeams} designations={designations} setDesignations={setDesignations} roles={roles} setRoles={setRoles}/>}
       </div>
       <CreateTaskModal open={createOpen} onClose={()=>setCreateOpen(false)} currentUser={currentUser} projects={projects} users={allUsers} onSubmit={handleCreateTask}/>
-      <TaskDetailModal open={!!detailTask} onClose={()=>setDetailTask(null)} task={detailTask} projects={projects} users={allUsers} currentUser={currentUser} onUpdate={handleUpdateTask} onDelete={(id)=>setTasks(prev=>prev.filter(t=>t.id!==id))}/>
+      <TaskDetailModal open={!!detailTask} onClose={()=>setDetailTask(null)} task={detailTask} projects={projects} users={allUsers} currentUser={currentUser} onUpdate={handleUpdateTask} onDelete={(id)=>{
+        const t = tasks.find(x=>x.id===id);
+        setTasks(prev=>prev.filter(t=>t.id!==id));
+        setDetailTask(null);
+        if (t?.backendId) fetch(`${API_URL}/api/shared/tasks/${t.backendId}`,{method:"DELETE",headers:{"x-admin-key":ADMIN_KEY}}).catch(()=>{});
+      }}/>
     </div>
   );
 }
