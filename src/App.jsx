@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 
-const API_URL   = "https://taskflow-backend-production-7392.up.railway.app";
+const API_URL   = (import.meta.env.VITE_API_BASE_URL || "https://taskflow-backend-production-1430.up.railway.app").replace(/\/$/, "");
 const ADMIN_KEY = "OzoAdmin@2026";
 import {
   LayoutDashboard, CheckSquare, FolderOpen, Users, Bell,
